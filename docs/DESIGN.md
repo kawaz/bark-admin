@@ -5,7 +5,7 @@ iPhone / iPad の [Bark](https://github.com/Finb/Bark) アプリへ通知を送�
 ## 目的と責務
 
 - 目的: 自作ツールやスクリプトが「誰のどの端末に送るか」をタグで指定して通知を送れるようにする。端末の追加・命名・退役を Web UI で行える
-- 責務: 登録簿 (タグ、登録日時、退役、端末ごとの暗号化キー、登録の要求から観察した端末情報) / 招待による登録 / タグによる宛先解決とファンアウト / 鍵を持つ端末への通知内容の暗号化 / 管理 UI
+- 責務: 登録簿 (タグ、登録日時、退役、端末ごとの暗号化キー、登録の要求から観察した端末情報) / 招待 (再利用できるテンプレ) と使い切りの登録トークンによる登録 / タグによる宛先解決とファンアウト / 鍵を持つ端末への通知内容の暗号化 / 管理 UI
 - 責務外: APNs への配送 (bark-server)、Bark アプリへの鍵の設定 (端末の持ち主が招待ページか詳細画面から手で貼る)、認証 (到達制限は canddy の tailnet_only が担う。device_id は秘密扱いしない)
 
 ## 配置
@@ -20,7 +20,7 @@ Web UI (人) ──────┘
 - どちらも常駐せず、canddy の on-demand 起動 (502 → ensure スクリプト → 302)。bark-admin の ensure スクリプト (`ondemand/bark-admin-ensure.sh`) が bark-server の ensure (canddy-app-proxy の `ondemand/bark-server-ensure.sh`) も呼ぶ
 - bun + TypeScript。スキーマは valibot で定義し型を導く (境界で parse、`as` / `any` / `!` 禁止)
 - 設定: `${XDG_CONFIG_HOME}/bark-admin/config.toml` に `server_url` (招待 URL / QR に埋める公開 URL、例 `https://bark.kawaz-mbp16-20211217.kawaz.jp`) と `db_path` (登録簿の置き場) の 2 つ。listen port (8086) と bark-server の upstream (`127.0.0.1:8085`) は既定値で、変えるときは env `BARK_ADMIN_ADDR` / `BARK_SERVER_URL`
-- データ: `${XDG_DATA_HOME}/bark-admin/devices.json` (= `db_path` の既定) (atomic rename で書く。台数が 1 桁なので DB を持たず手で直せる方を優先)。招待は `invites.json`
+- データ: `${XDG_DATA_HOME}/bark-admin/devices.json` (= `db_path` の既定) (atomic rename で書く。台数が 1 桁なので DB を持たず手で直せる方を優先)。招待は `invites.json`、登録トークンは `registrations.json` (同じディレクトリ)。1 回限りの招待だった頃の `invites.json` (`used_by` を持つ行) は起動時に `invites.legacy-<日時>.json` へ退けて空から始める
 - ログ: `${XDG_STATE_HOME}/bark-admin/server.log`
 
 ## データ
@@ -39,24 +39,34 @@ Web UI (人) ──────┘
       "user_agent": "Bark/1.6.4 (me.fin.bark; build:8; iOS 26.7.1) Alamofire/5.10.2",
       "lang": "ja;q=1.0, en;q=0.9",          // Accept-Language の値そのまま
       "ts_name": "zunphone.tail0000.ts.net", "ts_hostname": "zunPhone", "ts_os": "iOS", "ts_user": "<LoginName>", "ts_ip": "100.104.30.107",  // tailscale whois
-      "browser_user_agent": "Mozilla/5.0 (iPhone; …) … Safari/604.1", "browser_hints": { "sec-ch-ua-mobile": "?1" },  // 招待ページを開いたブラウザ
+      "browser_user_agent": "Mozilla/5.0 (iPhone; …) … Safari/604.1", "browser_hints": { "sec-ch-ua-mobile": "?1" },  // 招待ページを開いたブラウザ (登録トークンの browser)
       "last_register_at": "2026-10-20T13:30:00+09:00"
     }                                        // 項目は全部 optional (取れなかったものは書かない)
   }
 }
-// invites.json
-{ "<invite>": { "tags": { "owner": "kawaz", "name": "ipad" }, "created_at": "…", "used_by": null, "crypto": { "key": "…" }, "browser": { "user_agent": "…", "hints": { … } } } }
+// invites.json: 招待 = 再利用できるテンプレ。削除するまで何度でも使える
+{ "<invite>": { "tags": { "owner": "kawaz", "name": "ipad" }, "encrypt": true, "created_at": "…", "note": "家族の iPad 用" } }   // note は任意
+// registrations.json: 登録トークン = 招待ページを開くたびに発行する使い切りのサーバ URL (/r/<token>)
+{
+  "<token>": {
+    "invite": "<invite>",
+    "crypto": { "key": "…" },                // 招待の encrypt が true ならトークンごとに新しい鍵。false なら null
+    "browser": { "user_agent": "…", "hints": { … } },   // 招待ページを開いたブラウザ
+    "created_at": "…", "expires_at": "…",    // 期限は 24 時間
+    "used_by": null, "used_at": null         // 登録に使われたら device_id と日時
+  }
+}
 ```
 
 ## 端末情報と自動タグ
 
-登録 (`/register` と `/r/<invite>/register`) のたびに、要求から観察できる値を `info` に記録し、そこからタグを自動で付ける。実装は `src/device-info.ts`。
+登録 (`/register` と `/r/<token>/register`) のたびに、要求から観察できる値を `info` に記録し、そこからタグを自動で付ける。実装は `src/device-info.ts`。
 
 - Bark アプリの要求のヘッダは `User-Agent: Bark/<版> (me.fin.bark; build:<build>; <OS> <版>) Alamofire/<版>` と `Accept-Language` だけ (Sec-CH-UA 等は来ない)。UA がこの形でなければ `bark_version` / `bark_build` / `os_version` は付けない
 - canddy が付ける `X-Forwarded-For` の末尾の IP を `/Applications/Tailscale.app/Contents/MacOS/Tailscale whois --json <ip>` (PATH に無い前提の絶対パス、タイムアウト 2 秒) で引き、`Node.Name` (末尾の `.` を落とす) / `Node.Hostinfo.Hostname` / `Node.Hostinfo.OS` / `UserProfile.LoginName` を `ts_*` に写す。whois は bark-server の応答を待つ間に走らせ、失敗・タイムアウト・null の項目は書かないだけで登録は通す
-- 招待ページ (`/bark-admin/add/<invite>`) を未使用のうちに開いたブラウザの `User-Agent` と `Sec-CH-UA*` を招待の `browser` に残し (最後に開いたものが残る)、その招待経由の登録で `browser_user_agent` / `browser_hints` に写す。アプリは招待入り URL で再登録し続けるので、再登録でも写り続ける
+- 招待ページ (`/bark-admin/add/<invite>`) を開いたブラウザの `User-Agent` と `Sec-CH-UA*` をそのとき発行する登録トークンの `browser` に残し、そのトークンでの登録で `browser_user_agent` / `browser_hints` に写す。アプリはトークン入り URL で再登録し続けるので、再登録でも写り続ける
 - 自動タグ: `name` = `ts_hostname` の小文字、`os` = `ts_os` (無ければ UA の OS 名) の小文字、`lang` = Accept-Language の先頭の言語の主タグ (`ja`)、`ts_user` = `ts_user`。`owner` は人が決めるので付けない
-- タグの優先は 招待 > 既存 > 自動。自動タグは device の `tags` に無いキーだけ埋める (人が消した自動タグは次の登録で戻る)。招待のタグは招待を使う登録 (未使用の招待) でだけ付け、使用済み招待での再登録では付け直さない (人が直したタグを戻さない)
+- タグの優先は 招待 > 既存 > 自動。自動タグは device の `tags` に無いキーだけ埋める (人が消した自動タグは次の登録で戻る)。招待のタグは登録トークンを使う登録 (未使用のトークン) でだけ付け、使用済みトークンでの再登録では付け直さない (人が直したタグを戻さない)
 
 ## 暗号化
 
@@ -65,18 +75,19 @@ Bark アプリの「推送加密 / Push Encryption」に合わせ、鍵を持つ
 - 方式は AES-256-GCM 固定 (アプリ側の設定は AES256 / GCM / noPadding)。鍵は端末ごとに 32 文字の `[A-Za-z0-9]` を CSPRNG から作り (rejection sampling で偏りなし)、その文字列の UTF-8 バイト列をそのまま鍵にする
 - 送るたびに端末ごとに 12 文字の `[A-Za-z0-9]` の IV を作る。平文は bark パラメータ全体の JSON (`device` / `device_key` を含まない)、`ciphertext = base64(暗号文 ‖ 16 byte の auth tag)`、AAD なし。暗号は WebCrypto (`crypto.subtle` の AES-GCM)
 - bark-server `/push` へ `{device_key, ciphertext, iv}` で 1 台ずつ送る。アプリは `ciphertext` を復号した JSON を通常のパラメータとして扱う
-- 鍵の配り方: 招待を `encrypt: true` で作ると招待に鍵が付き、招待ページに表示され、登録時に device へ写る。既存の端末は詳細画面の「暗号化キーを設定」で鍵を作り、そのままクリップボードへ写す (作り直す / 外すも詳細画面)。鍵は詳細 (`GET /bark-admin/api/devices/:id`) と未使用の招待ページでだけ見せ、一覧には `crypto: {confirmed_at}` だけ出す
+- 鍵の配り方: 招待を `encrypt: true` で作ると、招待ページを開くたびに発行する登録トークンに端末ごとの新しい鍵を作って招待ページに表示し、そのトークンでの登録で device へ写る (既存の端末でも写す。使用済みトークンでの再登録では写し直さないので、詳細画面で作り直した鍵は戻らない)。既存の端末は詳細画面の「暗号化キーを設定」で鍵を作り、そのままクリップボードへ写す (作り直す / 外すも詳細画面)。鍵は詳細 (`GET /bark-admin/api/devices/:id`) と、鍵を作ったその回の招待ページでだけ見せ、一覧には `crypto: {confirmed_at}` だけ出す
 - 確認: 鍵が Bark に正しく貼られたかは、暗号化した通知を端末が復号できたかで確かめる。詳細画面の「確認」で `POST …/crypto/confirm` → nonce を作って `crypto.pending_nonce` に保存し、その端末へ暗号化した確認通知 (title「bark-admin 暗号化の確認」、`url` = `<server_url>/bark-admin/api/devices/:id/crypto/confirm/<nonce>`) を送る。nonce は暗号文の中にしか無いので、復号できた端末だけがこの URL を開ける。タップで開かれると `crypto.confirmed_at` を記録して nonce を消す (同じ URL は 1 回だけ効く。確認を送り直すと前の nonce は無効)。鍵を作り直す / 設定し直すと未確認に戻る。`pending_nonce` は API に出さない
 
-## 登録の流れ (招待 URL)
+## 登録の流れ (招待と登録トークン)
 
-Bark アプリは `bark://addserver?address=<URL>` でサーバを追加し、`<URL>/ping` → `<URL>/register?devicetoken=…&key=` を叩く (Moya が `baseURL.appendingPathComponent(path)` で結合する。path 付き URL でも成立する、ソースで確認済み)。これを使い、**サーバ URL に招待を埋める**:
+Bark アプリは `bark://addserver?address=<URL>` でサーバを追加し、`<URL>/ping` → `<URL>/register?devicetoken=…&key=` を叩く (Moya が `baseURL.appendingPathComponent(path)` で結合する。path 付き URL でも成立する、ソースで確認済み)。これを使い、**サーバ URL に使い切りの登録トークンを埋める**。QR が指す招待は再利用でき、トークンは招待ページを開くたびに発行する 2 層にする (同じ QR で何台でも追加でき、鍵は端末ごとに別になる):
 
-1. UI の「デバイス追加」でタグを入力 (「暗号化する」が既定 on) → `POST /bark-admin/api/invites` → `<invite>` 発行 (暗号化するなら招待に鍵を作る)
-2. QR の中身は `https://bark.<host>/bark-admin/add/<invite>` (Safari で開く案内ページ。iOS カメラが custom scheme の QR を直接開けるかは未検証なので https にする)。ページに「Bark で開く」(`bark://addserver?address=https://bark.<host>/r/<invite>`)、招待に鍵があれば「暗号化キー」(鍵とコピーボタン、アプリでの設定手順)、App Store リンク
-3. アプリが `/r/<invite>/ping` `/r/<invite>/register` を叩く → bark-admin は prefix を剥がして bark-server の `/ping` `/register` へ透過し、応答の `device_key` / `device_token` で登録簿を upsert、招待のタグと鍵を付ける (`used_by` を記録、招待は 1 回限り)
-   - アプリは APNs token を受け取るたび (= 起動のたび) に、追加済みの全サーバへ `register?key=<自分の key>&devicetoken=…` を送り直す (`ServerManager.syncAllServers`)。招待入り URL も同じ URL で叩かれ続けるので、使用済みの招待でも `key` が `used_by` と一致する再登録は通す。それ以外 (別端末・key 空) は bark-server に渡さず 410
-   - 未知の招待は ping / register / 案内ページとも 404
+1. UI の「デバイス追加」でタグ・メモを入力 (「暗号化する」が既定 on) → `POST /bark-admin/api/invites` → `<invite>` 発行。招待は削除 (`DELETE /bark-admin/api/invites/<invite>`) するまで使える
+2. QR の中身は `https://bark.<host>/bark-admin/add/<invite>` (Safari で開く案内ページ。iOS カメラが custom scheme の QR を直接開けるかは未検証なので https にする)。開くたびに登録トークンを発行し (招待が暗号化するならトークンに新しい鍵を作る、開いたブラウザを記録、期限 24 時間)、ページに「Bark で開く」(`bark://addserver?address=https://bark.<host>/r/<token>`)、鍵があれば「暗号化キー」(鍵とコピーボタン、アプリでの設定手順)、App Store リンクを出す。新しいトークンを発行するときに、期限切れで未使用のトークンを捨てる
+3. アプリが `/r/<token>/ping` `/r/<token>/register` を叩く → bark-admin は prefix を剥がして bark-server の `/ping` `/register` へ透過し、応答の `device_key` / `device_token` で登録簿を upsert、招待のタグとトークンの鍵を付け、トークンに `used_by` / `used_at` を記録する (トークンは 1 回限り)
+   - アプリは APNs token を受け取るたび (= 起動のたび) に、追加済みの全サーバへ `register?key=<自分の key>&devicetoken=…` を送り直す (`ServerManager.syncAllServers`)。トークン入り URL も同じ URL で叩かれ続けるので、使用済みのトークンでも `key` が `used_by` と一致する再登録は通す (期限切れ・招待の削除後も)。register 以外 (ping 等) も使用済みのトークンでは透過する
+   - 使用済みのトークンへの別の key (別端末・key 空) の register、期限切れで未使用のトークン (register / ping とも) は bark-server に渡さず 410。招待が消えた未使用のトークンも 410
+   - 未知のトークンは 404、未知の (削除された) 招待の案内ページも 404。招待を削除すると、その招待の未使用のトークンも消す (使用済みは端末の再登録のために残す)
 4. 招待なしの素の `/register` も受ける (自動タグだけで登録、詳細ページで編集)。既存 key の再登録は token と `info` の更新、自動タグの補充 (端末情報と自動タグの節)
 
 ## HTTP API
@@ -88,10 +99,10 @@ URL を 2 面に分ける。root は bark-server 互換面で、bark 互換ク�
 | method path | 内容 |
 |---|---|
 | `* /<path>` | bark-server の全 endpoint (`/push` `/ping` `/healthz` `/info` `/register` `/<key>/…` の URL 形式 等) を method / query / body / Content-Type ごとそのまま透過し、応答も丸ごと返す。`/push` に `device` が来ても解釈しない |
-| `* /r/:invite/<path>` | 招待入りのサーバ URL。`/r/:invite` を剥がして同様に透過する。未知の招待は 404 |
+| `* /r/:token/<path>` | 登録トークン入りのサーバ URL。`/r/:token` を剥がして同様に透過する。未知のトークンは 404、期限切れ・使用済み (使った本人の再登録を除く) は 410 (登録の流れ参照) |
 | `GET /` | `302 /bark-admin/` |
 
-bark-admin が中身を見るのは `/register` と `/r/:invite/register` の 1 点だけ: bark-server が 200 で返した `data.device_key` / `data.device_token` を登録簿に写し、要求のヘッダと whois から `info` と自動タグを付ける (登録の流れ、端末情報と自動タグの節参照)。
+bark-admin が中身を見るのは `/register` と `/r/:token/register` の 1 点だけ: bark-server が 200 で返した `data.device_key` / `data.device_token` を登録簿に写し、要求のヘッダと whois から `info` と自動タグを付ける (登録の流れ、端末情報と自動タグの節参照)。
 
 ### 管理面 (`/bark-admin/`)
 
@@ -105,10 +116,12 @@ bark-admin が中身を見るのは `/register` と `/r/:invite/register` の 1 
 | `POST /bark-admin/api/devices/:id/crypto/confirm` | 確認通知を暗号化して送る (暗号化の節)。`{sent: {device_id, status, message?, encrypted}}`、bark-server が受けなければ 502、鍵が無ければ 409 |
 | `GET /bark-admin/api/devices/:id/crypto/confirm/:nonce` | 確認通知の `url`。nonce が一致すれば確認済みにして「確認できた」の HTML、不一致は 404 の HTML |
 | `DELETE /bark-admin/api/devices/:id` | `archived_at` を立てる (復帰は PATCH `{archived_at: null}`) |
-| `POST /bark-admin/api/invites` `{tags, encrypt?}` | `{invite, add_url, addserver_url, crypto}`。`encrypt: true` なら招待に鍵を作り `crypto: {key}`、それ以外は `crypto: null` |
+| `POST /bark-admin/api/invites` `{tags, encrypt?, note?}` | 201 で招待 `{invite, add_url, tags, encrypt, created_at, note?, registered: 0}`。`encrypt` の既定は false (UI は既定 on で送る) |
+| `GET /bark-admin/api/invites` | jsonl (1 行 1 招待、POST の応答と同じ形、`registered` はその招待の使用済みトークンの数 = 登録した端末の数) |
+| `DELETE /bark-admin/api/invites/:invite` | 招待とその未使用のトークンを消す。204、無ければ 404 |
 | `GET /bark-admin/api/invites/:invite/qr.svg` | `add_url` の QR (SVG)。TOP のデバイス追加で表示する |
 | `GET /bark-admin/api/schema` | 通知パラメータのスキーマ (`{fields: [{name, kind, group, description, …}]}`)。TOP のテストフォームはこれから描く |
-| `GET /bark-admin/` `/bark-admin/devices/:id` `/bark-admin/add/:invite` | 画面 (下記)。静的ファイルは `/bark-admin/assets/`。`/bark-admin/add/:invite` は未使用の招待なら開いたブラウザを招待の `browser` に記録する |
+| `GET /bark-admin/` `/bark-admin/devices/:id` `/bark-admin/add/:invite` | 画面 (下記)。静的ファイルは `/bark-admin/assets/`。`/bark-admin/add/:invite` は開くたびに登録トークンを発行する (`cache-control: no-store`) |
 
 パラメータのスキーマ (title / subtitle / body / markdown / sound / icon / image / group / level / volume / badge / call / url / copy / autoCopy / isArchive / ttl / action / id / delete) は `src/schema/push-params.ts` の 1 か所で定義し、`/bark-admin/push` の検証と TOP のフォーム生成の両方に使う。出典は bark-server `docs/API_V2.md` と Bark `docs/en-us/params.md`。暗号化の `ciphertext` / `iv` は bark-admin が作るので受け付けない (root の互換面は従来どおり透過する)。型は bark-server の扱いに合わせる: `badge` / `ttl` は JSON の整数、`volume` は `"0"`〜`"10"` の文字列、`call` / `autoCopy` / `delete` は `"1"`、`isArchive` は `"1"` / `"0"`、`delete` は `id` 必須。
 
@@ -122,9 +135,9 @@ bark-admin が中身を見るのは `/register` と `/r/:invite/register` の 1 
 
 ## 画面
 
-- `/bark-admin/` TOP: 通知テストフォーム (スキーマから生成、送信先はフィルタに当たる全台) / フィルタ入力 (`k=v` 改行区切り AND) / デバイス一覧 (device_id, owner, name とその下に `info.os_version`, 暗号化の有無と未確認, 主要 4 tag + 残り n 件, registered_at。device_id で詳細へ) / デバイス追加 (タグ入力 + 「暗号化する」(既定 on) → QR)
+- `/bark-admin/` TOP: 通知テストフォーム (スキーマから生成、送信先はフィルタに当たる全台) / フィルタ入力 (`k=v` 改行区切り AND) / デバイス一覧 (device_id, owner, name とその下に `info.os_version`, 暗号化の有無と未確認, 主要 4 tag + 残り n 件, registered_at。device_id で詳細へ) / デバイス追加 (招待の作成: タグ・メモ・「暗号化する」(既定 on) → QR、招待の一覧: タグ・メモ・暗号化・登録数、QR を再表示 / 削除)
 - `/bark-admin/devices/:id`: タグ編集、暗号化 (無効 / 有効・未確認 / 有効・確認済み <日時>、「暗号化キーを設定」で鍵を作ってコピー、再コピー、確認、作り直す、無効にする)、端末情報 (`info` の定義リスト、無い項目は出さない)、退役ボタン、device_token と登録日時
-- `/bark-admin/add/:invite`: 招待の案内ページ (登録の流れ参照)
+- `/bark-admin/add/:invite`: 招待の案内ページ。開くたびにその 1 台用の登録トークンを発行する (登録の流れ参照)
 - ビルド無しの静的 HTML + fetch。モダン CSS / JS (Baseline) を使い古いハックで代替しない
 
 ## 送信側の規約
