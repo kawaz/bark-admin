@@ -1,3 +1,5 @@
+import { assetUrl } from "../assets.ts";
+
 // /bark-admin/add/:invite の案内ページと、確認通知から開かれるページ。QR から iPhone の Safari で開かれ、Bark アプリにサーバ (登録トークン入り URL) を追加させる。
 // 案内ページは 3 段のステップ (1. サーバーを追加 → 2. 受信確認 → 3. 暗号化 (鍵付きの招待だけ)) を縦に並べる (見た目の判断は docs/design/ui.md)。
 // 動きは public/assets/add.js: 段の進み具合は GET /bark-admin/api/registrations/:token で読む。
@@ -16,8 +18,8 @@ function page(title: string, main: string, script = ""): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/bark-admin/assets/style.css">
-${script === "" ? "" : `<script type="module" src="/bark-admin/assets/${script}"></script>\n`}</head>
+<link rel="stylesheet" href="${assetUrl("style.css")}">
+${script === "" ? "" : `<script type="module" src="${assetUrl(script)}"></script>\n`}</head>
 <body>
 <main class="invite">
 ${main}

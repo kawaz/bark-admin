@@ -1,7 +1,6 @@
-import { readdirSync } from "node:fs";
-import { join } from "node:path";
 import QRCode from "qrcode";
 import * as v from "valibot";
+import { assetRoutes, staticHtml } from "./assets.ts";
 import { BarkServer, RegisterResponseSchema, UpstreamError, type PushResult } from "./bark-server.ts";
 import { autoTags, browserFromHeaders, forwardedIp, observeRegistration, tailscaleWhois, type TailnetInfo, type Whois } from "./device-info.ts";
 import { gateToken, issueRegistration, registrationState } from "./invites.ts";
@@ -52,8 +51,6 @@ export type AppDeps = {
   // X-Forwarded-For の IP から tailnet の端末情報を引く (既定は tailscale whois)
   whois?: Whois;
 };
-
-const PUBLIC_DIR = join(import.meta.dir, "..", "public");
 
 // /bark-admin/push の body: bark V2 パラメータ (device_key / device_keys を除く) + device (タグ filter)
 const AdminPushEnvelopeSchema = v.looseObject({ device: v.optional(TagsSchema) });
@@ -383,16 +380,13 @@ export function createApp(deps: AppDeps) {
     return Response.json({ key: rec.crypto.key }, { headers: { "cache-control": "no-store" } });
   }
 
-  const assets = Object.fromEntries(
-    readdirSync(join(PUBLIC_DIR, "assets")).map((name) => [`${ADMIN}/assets/${name}`, new Response(Bun.file(join(PUBLIC_DIR, "assets", name)))]),
-  );
-
   const routes = {
     "/": Response.redirect(`${ADMIN}/`, 302),
     [ADMIN]: Response.redirect(`${ADMIN}/`, 302),
-    [`${ADMIN}/`]: new Response(Bun.file(join(PUBLIC_DIR, "index.html"))),
-    [`${ADMIN}/devices/:id`]: new Response(Bun.file(join(PUBLIC_DIR, "device.html"))),
-    ...assets,
+    // HTML と静的ファイルは版つき URL・no-cache・ETag で配る (src/assets.ts)
+    [`${ADMIN}/`]: staticHtml("index.html"),
+    [`${ADMIN}/devices/:id`]: staticHtml("device.html"),
+    ...assetRoutes(),
     [`${ADMIN}/add/:invite`]: { GET: (req: Bun.BunRequest<"/bark-admin/add/:invite">) => addPage(req, req.params.invite) },
     [`${ADMIN}/push`]: { POST: adminPush },
     [`${ADMIN}/api/schema`]: { GET: () => json(200, { fields: pushParamFields }) },

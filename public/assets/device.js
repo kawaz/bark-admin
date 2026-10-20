@@ -1,6 +1,17 @@
 import { copyText, el, errorMessage, formatAt, formatTagLines, parseTagLines, writeClipboard } from "./common.js";
 
-const $ = (sel) => document.querySelector(sel);
+// HTML と JS の版がずれると (古い版がキャッシュに残る等) 要素が見つからない。黙って空欄にせず、知らせて止める
+function stale(sel) {
+  console.error(`bark-admin: ${sel} is not in the page. The HTML and the script are from different versions`);
+  if (document.querySelector("#stale") === null) {
+    const note = Object.assign(document.createElement("p"), { id: "stale", className: "error", role: "alert", textContent: "古い版が表示されている。再読み込みする " });
+    note.append(Object.assign(document.createElement("button"), { type: "button", className: "secondary", textContent: "再読み込み", onclick: () => location.reload() }));
+    document.querySelector("main")?.prepend(note);
+  }
+  throw new Error(`missing element ${sel}`);
+}
+
+const $ = (sel) => document.querySelector(sel) ?? stale(sel);
 const id = decodeURIComponent(location.pathname.split("/").at(-1));
 const api = `/bark-admin/api/devices/${encodeURIComponent(id)}`;
 
@@ -45,9 +56,6 @@ function render(d) {
   $("#device-id").textContent = d.device_id;
   $("#device-id-fact").textContent = d.device_id;
   setTime($("#registered-at"), d.registered_at);
-  // APNs が無効と返した端末は bark-server が token を空にする。アプリを起動すると登録し直される
-  if (d.device_token === "") $("#device-token").textContent = "なし。Bark アプリを起動すると登録し直される";
-  else $("#device-token").replaceChildren(Object.assign(document.createElement("code"), { textContent: d.device_token }));
   $("#tags").value = formatTagLines(d.tags);
   const tags = Object.entries(d.tags);
   $("#tag-chips").replaceChildren(...(tags.length === 0 ? [el("li", { className: "hint", textContent: "タグなし" })] : tags.map(([k, v]) => el("li", { className: "tag", textContent: `${k}=${v}` }))));

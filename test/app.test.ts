@@ -280,11 +280,15 @@ describe("devices API", () => {
     expect(nonce).not.toBe("");
     const lines = (await (await fetch(`${base}/bark-admin/api/devices?name=iphone`)).text()).split("\n").filter((l) => l !== "");
     expect(lines.map((l) => JSON.parse(l))).toEqual([
-      { device_id: "A", device_token: "ta", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, crypto: { confirmed_at: null }, info: {}, delivery: { confirmed_at: null } },
+      { device_id: "A", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, crypto: { confirmed_at: null }, info: {}, delivery: { confirmed_at: null } },
     ]);
     expect(lines.join("")).not.toContain(KEY_A);
     const detail = await (await fetch(`${base}/bark-admin/api/devices/A`)).text();
     expect(JSON.parse(detail)).toMatchObject({ crypto: { key: KEY_A, confirmed_at: null } });
+    // device_token は登録簿に残すが、詳細にも一覧にも出さない
+    expect(detail).not.toContain("device_token");
+    expect(lines.join("")).not.toContain("device_token");
+    expect((await store.devices.read())["A"]?.device_token).toBe("ta");
     expect(detail).not.toContain(nonce);
     expect(await (await fetch(`${base}/bark-admin/api/devices/B`)).json()).toMatchObject({ crypto: null });
   });
@@ -797,5 +801,30 @@ describe("routing", () => {
     expect((await fetch(`${base}/bark-admin/`)).headers.get("content-type")).toContain("text/html");
     expect((await fetch(`${base}/bark-admin/devices/A`)).headers.get("content-type")).toContain("text/html");
     expect((await fetch(`${base}/bark-admin/assets/index.js`)).status).toBe(200);
+  });
+
+  test("HTML refers to assets with ?v=<hash>, JS imports are versioned too; HTML and assets are no-cache with an ETag (304 when unchanged)", async () => {
+    const versioned = /\/bark-admin\/assets\/device\.js\?v=[0-9a-f]{8}"/;
+    const detail = await fetch(`${base}/bark-admin/devices/A`);
+    const html = await detail.text();
+    expect(html).toMatch(versioned);
+    expect(html).toMatch(/\/bark-admin\/assets\/style\.css\?v=[0-9a-f]{8}"/);
+    expect(html).not.toMatch(/assets\/[a-z.]+"/);
+    expect(detail.headers.get("cache-control")).toBe("no-cache");
+    expect(detail.headers.get("etag")).toMatch(/^"[0-9a-f]{16}"$/);
+    // 案内ページ (サーバで組む HTML) も版つき
+    const inv = await createInvite({});
+    expect((await openAdd(inv.invite)).page).toMatch(/\/bark-admin\/assets\/add\.js\?v=[0-9a-f]{8}"/);
+
+    const js = await fetch(`${base}/bark-admin/assets/device.js`);
+    expect(js.headers.get("cache-control")).toBe("no-cache");
+    expect(js.headers.get("content-type")).toContain("text/javascript");
+    const etag = js.headers.get("etag") ?? "";
+    expect(etag).toMatch(/^"[0-9a-f]{16}"$/);
+    expect(await js.text()).toMatch(/from "\.\/common\.js\?v=[0-9a-f]{8}"/);
+    const again = await fetch(`${base}/bark-admin/assets/device.js`, { headers: { "if-none-match": etag } });
+    expect(again.status).toBe(304);
+    // URL の版は ETag の先頭と同じ
+    expect(html).toContain(`device.js?v=${etag.slice(1, 9)}"`);
   });
 });

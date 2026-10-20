@@ -109,16 +109,16 @@ export type Registrations = v.InferOutput<typeof RegistrationsSchema>;
 // 招待を作り替える前の invites.json の行 (used_by を持つ)。起動時に見つけたら脇へ退ける
 export const LegacyInvitesSchema = v.record(v.string(), v.looseObject({ used_by: v.nullable(v.string()) }));
 
-// API で外に出す 1 device の形 (キーだった device_id を中に持つ)。pending_nonce は確認の根拠なので外に出さない
+// API で外に出す 1 device の形 (キーだった device_id を中に持つ)。pending_nonce は確認の根拠なので、device_token は使い道が無いので外に出さない
 // info の無い行も {} で出す。delivery は確認状態だけ (無い行は未確認)
-export type DeviceView = { device_id: string } & Omit<DeviceRecord, "crypto" | "info" | "delivery"> & {
+export type DeviceView = { device_id: string } & Omit<DeviceRecord, "crypto" | "info" | "delivery" | "device_token"> & {
   crypto: { key: string; confirmed_at: string | null } | null;
   info: DeviceInfo;
   delivery: { confirmed_at: string | null };
 };
 
 // 一覧 (GET /api/devices) の 1 行。鍵は詳細でだけ見せ、一覧には暗号化の有無と確認状態だけ出す。info は一覧の表示に使う 2 項目だけ
-export type DeviceListItem = { device_id: string } & Omit<DeviceRecord, "crypto" | "info" | "delivery"> & {
+export type DeviceListItem = { device_id: string } & Omit<DeviceRecord, "crypto" | "info" | "delivery" | "device_token"> & {
   crypto: { confirmed_at: string | null } | null;
   delivery: { confirmed_at: string | null };
   info: Pick<DeviceInfo, "ts_hostname" | "os_version">;

@@ -16,10 +16,13 @@ export function matchTags(tags: Tags, filter: Tags): boolean {
   return Object.entries(filter).every(([k, pattern]) => matchTag(tags[k], pattern));
 }
 
-export function view(id: string, { crypto, info, delivery, ...rest }: DeviceRecord): DeviceView {
+// device_token (APNs の token) は bark-server の写しで送信にも照合にも使わないので外に出さない (登録簿には残す)
+export function view(id: string, { crypto, info, delivery, registered_at, archived_at, tags }: DeviceRecord): DeviceView {
   return {
     device_id: id,
-    ...rest,
+    registered_at,
+    archived_at,
+    tags,
     crypto: crypto === null ? null : { key: crypto.key, confirmed_at: crypto.confirmed_at },
     info: info ?? {},
     delivery: { confirmed_at: delivery?.confirmed_at ?? null },
