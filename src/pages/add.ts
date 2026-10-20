@@ -95,13 +95,15 @@ export function addPageHtml(p: { addserverUrl: string; token: string; tags: Reco
 ${addStep(p.addserverUrl, tags)}
 ${deliveryStep()}
 ${p.encrypted ? `${cryptoStep()}\n` : ""}</ol>
-<p id="flow-status" class="hint" role="status"></p>`,
+<p id="flow-status" class="hint" role="status"></p>
+<a id="device-link" class="button open" hidden>この端末の設定を開く</a>`,
     "add.js",
   );
 }
 
+// 行き止まりにしないよう TOP へのリンクを置く
 export function notFoundPageHtml(message: string, heading = "招待が見つからない"): string {
-  return page("bark-admin: 見つからない", `<h1>${esc(heading)}</h1>\n<p>${esc(message)}</p>`);
+  return page("bark-admin: 見つからない", `<h1>${esc(heading)}</h1>\n<p>${esc(message)}</p>\n<a class="button secondary" href="/bark-admin/">bark-admin の TOP を開く</a>`);
 }
 
 // 確認通知をタップして開かれるページ (crypto は復号できた端末だけが URL を知る)。
@@ -120,6 +122,7 @@ export function confirmedPageHtml(p: { kind: "delivery" | "crypto"; deviceId: st
     `bark-admin: ${what.title}`,
     `<h1>${what.title}</h1>
 <p>${what.line}Bark のサーバー一覧で、この device_id と同じ key のサーバーがこの端末の登録。このページは閉じてよい。</p>
-<dl class="facts">${facts}</dl>`,
+<dl class="facts">${facts}</dl>
+<a class="button open" href="/bark-admin/devices/${encodeURIComponent(p.deviceId)}">この端末の設定を開く</a>`,
   );
 }

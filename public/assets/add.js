@@ -27,10 +27,16 @@ function setStep(id, mode, done = []) {
   line.hidden = mode !== "done" || line.childNodes.length === 0;
 }
 
-function finish(message) {
+// done なら登録した端末の詳細ページへのリンクを出す (表示だけで終わらせない)
+function finish(message, done = false) {
   finished = true;
   clearInterval(timer);
   $("#flow-status").textContent = message;
+  if (done && deviceId !== null) {
+    const link = $("#device-link");
+    link.href = `/bark-admin/devices/${encodeURIComponent(deviceId)}`;
+    link.hidden = false;
+  }
 }
 
 function unusable() {
@@ -58,10 +64,10 @@ function render(r) {
     return;
   }
   setStep("delivery", "done", "受信を確認できた");
-  if (!hasCrypto) return finish("すべて済んだ。このページは閉じてよい");
+  if (!hasCrypto) return finish("すべて済んだ。このページは閉じてよい", true);
   if ((r.device?.crypto?.confirmed_at ?? null) === null) return setStep("crypto", "current");
   setStep("crypto", "done", "暗号化を確認できた");
-  finish("すべて済んだ。このページは閉じてよい");
+  finish("すべて済んだ。このページは閉じてよい", true);
 }
 
 async function check() {

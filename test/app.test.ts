@@ -369,6 +369,11 @@ describe("devices API", () => {
     expect(page).toContain("<dd>iphone</dd>");
     expect(page).toContain("<dd>kawaz</dd>");
     expect(page).toContain(`受信確認 <time datetime="${NOW}">`);
+    expect(page).toContain('<a class="button open" href="/bark-admin/devices/A">この端末の設定を開く</a>');
+    // 使用済みの確認リンクは 404 の HTML で、TOP へのリンクを置く
+    const used = await fetch(`${base}/bark-admin/api/devices/A/confirm/delivery/${nonce}`);
+    expect(used.status).toBe(404);
+    expect(await used.text()).toContain('href="/bark-admin/"');
     expect((await store.devices.read())["A"]?.delivery).toEqual({ confirmed_at: NOW, pending_nonce: null });
     expect(await (await fetch(`${base}/bark-admin/api/devices/A`)).json()).toMatchObject({ delivery: { confirmed_at: NOW }, crypto: { confirmed_at: null } });
     const [line] = (await (await fetch(`${base}/bark-admin/api/devices?name=iphone`)).text()).split("\n");
@@ -458,6 +463,8 @@ describe("invites and registration tokens", () => {
     // 鍵の平文はページに出さない
     expect(first.page).not.toContain(first.key ?? "-");
     expect(first.page).toContain("••••••••");
+    // 「すべて済んだ」で出す詳細ページへのリンクの置き場 (href は登録を見つけてから add.js が入れる)
+    expect(first.page).toContain('<a id="device-link" class="button open" hidden>この端末の設定を開く</a>');
     expect((await store.registrations.read())[first.token]).toMatchObject({ invite: inv.invite, crypto: { key: first.key }, used_by: null, used_at: null });
 
     expect((await fetch(`${base}/r/${first.token}/register?devicetoken=t1&key=E1`)).status).toBe(200);
@@ -629,7 +636,9 @@ describe("invites and registration tokens", () => {
   test("unknown token is 404 for ping and register, unknown invite is 404 for the add page", async () => {
     expect((await fetch(`${base}/r/nope/ping`)).status).toBe(404);
     expect((await fetch(`${base}/r/nope/register?devicetoken=t&key=`)).status).toBe(404);
-    expect((await fetch(`${base}/bark-admin/add/nope`)).status).toBe(404);
+    const notFound = await fetch(`${base}/bark-admin/add/nope`);
+    expect(notFound.status).toBe(404);
+    expect(await notFound.text()).toContain('href="/bark-admin/"');
     expect(received).toHaveLength(0);
   });
 
