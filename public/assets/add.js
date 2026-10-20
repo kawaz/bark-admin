@@ -16,15 +16,15 @@ let timer = null;
 let finished = false;
 let deviceId = null;
 
-// mode: done (✓ と 1 行) / current (中身を見せて強調) / later (見出しだけ薄く)
-function setStep(id, mode, doneText = "") {
+// mode: done (✓ と 1 行) / current (中身を見せて強調) / later (見出しだけ薄く)。done の 1 行は文字列か node の並び
+function setStep(id, mode, done = []) {
   const li = $(`#step-${id}`);
   if (li === null) return;
   li.className = `step ${mode}`;
   li.querySelector(".body").hidden = mode !== "current";
   const line = li.querySelector(".done-line");
-  line.textContent = doneText;
-  line.hidden = mode !== "done" || doneText === "";
+  line.replaceChildren(...[done].flat());
+  line.hidden = mode !== "done" || line.childNodes.length === 0;
 }
 
 function finish(message) {
@@ -48,7 +48,9 @@ function render(r) {
     return;
   }
   deviceId = r.used_by;
-  setStep("add", "done", `追加できた: ${r.device?.tags.name ?? r.used_by}`);
+  // Bark のサーバー一覧に同じ address が並んでも key (= device_id) で見分けられるよう、device_id を全文で添える
+  const name = r.device?.tags.name;
+  setStep("add", "done", [`追加できた: ${name ?? ""}`, ...(name === undefined ? [] : [" "]), Object.assign(document.createElement("code"), { className: "id", textContent: r.used_by })]);
   sendDeliveryOnce();
   if ((r.device?.delivery.confirmed_at ?? null) === null) {
     setStep("delivery", "current");
@@ -82,11 +84,12 @@ async function sendConfirm(kind, status) {
   return res.ok;
 }
 
+// 送れなかった時も印は残す (状態を読むたびに送り直すと、bark-server が受けない間ずっと送り続け、nonce も入れ替わる)。送り直しは「もう一度送る」で
 async function sendDeliveryOnce() {
   if (sessionStorage.getItem(DELIVERY_SENT) !== null) return;
   sessionStorage.setItem(DELIVERY_SENT, "1");
   startPolling();
-  if (!(await sendConfirm("delivery", $("#delivery-status")))) sessionStorage.removeItem(DELIVERY_SENT);
+  await sendConfirm("delivery", $("#delivery-status"));
 }
 
 // ---------- 1. サーバーを追加 ----------

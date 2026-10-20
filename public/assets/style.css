@@ -730,6 +730,13 @@ main.detail {
 .device-title {
   display: grid;
   gap: 0.25rem;
+  /* Bark のサーバー一覧の key と 1 字ずつ見比べるので、名前の直下に大きめの固定幅で全文を出す */
+  .device-id code {
+    font-size: 1.125rem;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+    user-select: all;
+  }
   h1 {
     font-size: var(--step-3);
     overflow-wrap: anywhere;
@@ -891,6 +898,9 @@ main.invite {
     padding-inline-start: 2.35rem;
     font-weight: 600;
     overflow-wrap: anywhere;
+    code {
+      font-weight: 400;
+    }
   }
   &.current .mark {
     color: var(--paper);

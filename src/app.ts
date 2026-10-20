@@ -270,8 +270,8 @@ export function createApp(deps: AppDeps) {
     return withUpstream(async () => {
       const r =
         kind === "crypto" && key !== null
-          ? await pushEncrypted({ title: "bark-admin 暗号化の確認", body: "この通知をタップすると暗号化の確認が完了する", url }, { id, key })
-          : await bark.pushPlain(id, { title: "bark-admin 受信の確認", body: "この通知をタップすると受信確認が完了する", url });
+          ? await pushEncrypted({ title: "bark-admin 暗号化の確認", body: `この通知をタップすると暗号化の確認が完了する\ndevice: ${id}`, url }, { id, key })
+          : await bark.pushPlain(id, { title: "bark-admin 受信の確認", body: `この通知をタップすると受信確認が完了する\ndevice: ${id}`, url });
       const sent = { ...r, encrypted: kind === "crypto" };
       if (r.status === 200) return json(200, { sent });
       return json(502, { error: `bark-server did not accept the confirm notification: ${r.message ?? `status ${r.status}`}`, sent });
@@ -280,13 +280,13 @@ export function createApp(deps: AppDeps) {
 
   async function finishDeviceConfirm(id: string, kind: ConfirmKind, nonce: string): Promise<Response> {
     const at = now();
-    const ok = await store.devices.update((cur) => {
+    const confirmed = await store.devices.update((cur) => {
       const r = cur[id];
       const next = r === undefined ? null : finishConfirm(r, kind, nonce, at);
-      return next === null ? { result: false } : { next: { ...cur, [id]: next }, result: true };
+      return next === null ? { result: null } : { next: { ...cur, [id]: next }, result: next };
     });
-    if (!ok) return html(404, notFoundPageHtml("この確認リンクは使用済みか古い。確認を送り直す。", "確認リンクが見つからない"));
-    return html(200, confirmedPageHtml(kind));
+    if (confirmed === null) return html(404, notFoundPageHtml("この確認リンクは使用済みか古い。確認を送り直す。", "確認リンクが見つからない"));
+    return html(200, confirmedPageHtml({ kind, deviceId: id, tags: confirmed.tags, at }));
   }
 
   // URL の kind (delivery / crypto)。それ以外は 404

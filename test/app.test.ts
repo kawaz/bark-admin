@@ -317,7 +317,7 @@ describe("devices API", () => {
     const url = `https://bark.example/bark-admin/api/devices/A/confirm/crypto/${nonce}`;
     expect(sealed && JSON.parse(nodeDecrypt(KEY_A, sealed.iv, sealed.ciphertext))).toEqual({
       title: "bark-admin 暗号化の確認",
-      body: "この通知をタップすると暗号化の確認が完了する",
+      body: "この通知をタップすると暗号化の確認が完了する\ndevice: A",
       url,
     });
 
@@ -329,7 +329,10 @@ describe("devices API", () => {
     const ok = await fetch(`${base}/bark-admin/api/devices/A/confirm/crypto/${nonce}`);
     expect(ok.status).toBe(200);
     expect(ok.headers.get("content-type")).toContain("text/html");
-    expect(await ok.text()).toContain("暗号化を確認できた");
+    const page = await ok.text();
+    expect(page).toContain("暗号化を確認できた");
+    expect(page).toContain("<code>A</code>");
+    expect(page).toContain(`暗号化の確認 <time datetime="${NOW}">`);
     expect((await store.devices.read())["A"]?.crypto).toEqual({ key: KEY_A, confirmed_at: NOW, pending_nonce: null });
     expect(await (await fetch(`${base}/bark-admin/api/devices/A`)).json()).toMatchObject({ crypto: { key: KEY_A, confirmed_at: NOW } });
 
@@ -352,14 +355,20 @@ describe("devices API", () => {
     expect(push?.path).toBe("/push");
     expect(JSON.parse(push?.body ?? "")).toEqual({
       title: "bark-admin 受信の確認",
-      body: "この通知をタップすると受信確認が完了する",
+      body: "この通知をタップすると受信確認が完了する\ndevice: A",
       url: `https://bark.example/bark-admin/api/devices/A/confirm/delivery/${nonce}`,
       device_key: "A",
     });
     expect(await (await fetch(`${base}/bark-admin/api/devices/A`)).json()).toMatchObject({ delivery: { confirmed_at: null } });
     const ok = await fetch(`${base}/bark-admin/api/devices/A/confirm/delivery/${nonce}`);
     expect(ok.status).toBe(200);
-    expect(await ok.text()).toContain("受信を確認できた");
+    // 確認できたページは device_id (全文)・name / owner・kind と日時を出す (Bark のサーバー一覧の key と見比べる)
+    const page = await ok.text();
+    expect(page).toContain("受信を確認できた");
+    expect(page).toContain("<code>A</code>");
+    expect(page).toContain("<dd>iphone</dd>");
+    expect(page).toContain("<dd>kawaz</dd>");
+    expect(page).toContain(`受信確認 <time datetime="${NOW}">`);
     expect((await store.devices.read())["A"]?.delivery).toEqual({ confirmed_at: NOW, pending_nonce: null });
     expect(await (await fetch(`${base}/bark-admin/api/devices/A`)).json()).toMatchObject({ delivery: { confirmed_at: NOW }, crypto: { confirmed_at: null } });
     const [line] = (await (await fetch(`${base}/bark-admin/api/devices?name=iphone`)).text()).split("\n");

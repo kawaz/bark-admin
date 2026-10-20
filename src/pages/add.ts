@@ -104,9 +104,22 @@ export function notFoundPageHtml(message: string, heading = "招待が見つか�
   return page("bark-admin: 見つからない", `<h1>${esc(heading)}</h1>\n<p>${esc(message)}</p>`);
 }
 
-// 確認通知をタップして開かれるページ (crypto は復号できた端末だけが URL を知る)
-export function confirmedPageHtml(kind: "delivery" | "crypto"): string {
-  return kind === "delivery"
-    ? page("bark-admin: 受信を確認できた", `<h1>受信を確認できた</h1>\n<p>この端末に通知が届いている。このページは閉じてよい。</p>`)
-    : page("bark-admin: 暗号化を確認できた", `<h1>暗号化を確認できた</h1>\n<p>この端末は通知を復号できている。このページは閉じてよい。</p>`);
+// 確認通知をタップして開かれるページ (crypto は復号できた端末だけが URL を知る)。
+// Bark のサーバーリストに同じ address が並んでも、その key (= device_id) と見比べて登録簿上のどの端末かが分かるよう、device_id を全文で出す
+export function confirmedPageHtml(p: { kind: "delivery" | "crypto"; deviceId: string; tags: Record<string, string>; at: string }): string {
+  const what = p.kind === "delivery" ? { title: "受信を確認できた", line: "この端末に通知が届いている。", label: "受信確認" } : { title: "暗号化を確認できた", line: "この端末は通知を復号できている。", label: "暗号化の確認" };
+  const facts = [
+    ["device_id", `<code>${esc(p.deviceId)}</code>`],
+    ...(p.tags["name"] === undefined ? [] : [["name", esc(p.tags["name"])]]),
+    ...(p.tags["owner"] === undefined ? [] : [["owner", esc(p.tags["owner"])]]),
+    ["確認", `${what.label} <time datetime="${esc(p.at)}">${esc(p.at.slice(0, 16).replace("T", " "))}</time>`],
+  ]
+    .map(([k, val]) => `<dt>${k}</dt><dd>${val}</dd>`)
+    .join("");
+  return page(
+    `bark-admin: ${what.title}`,
+    `<h1>${what.title}</h1>
+<p>${what.line}Bark のサーバー一覧で、この device_id と同じ key のサーバーがこの端末の登録。このページは閉じてよい。</p>
+<dl class="facts">${facts}</dl>`,
+  );
 }
