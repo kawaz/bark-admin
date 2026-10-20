@@ -3,9 +3,10 @@ import * as v from "valibot";
 // bark V2 の通知パラメータの正本。`/push` の検証 (pushParamsSchema) と
 // TOP のテストフォーム生成 (GET /api/schema が返す pushParamFields) の両方がここから導かれる。
 // 出典: bark-server docs/API_V2.md と Bark docs/en-us/params.md。
+// 暗号化の ciphertext / iv は持たない: 鍵を持つ端末には bark-admin がこのパラメータ全体を暗号化して送る (push-crypto.ts)。
 
 type FieldBase = { name: string; group: FieldGroup; description: string };
-export type FieldGroup = "content" | "display" | "alert" | "action" | "encryption" | "archive";
+export type FieldGroup = "content" | "display" | "alert" | "action" | "archive";
 export type FieldSpec =
   | (FieldBase & { kind: "text" | "textarea" | "url" })
   | (FieldBase & { kind: "integer"; min: number })
@@ -42,8 +43,6 @@ export const pushParamFields: readonly FieldSpec[] = [
   { name: "autoCopy", kind: "flag", group: "action", description: "Copy automatically on arrival" },
   { name: "url", kind: "url", group: "action", description: "URL (or URL scheme) opened on tap" },
   { name: "action", kind: "enum", values: ["alert", "none"], group: "action", description: "alert: action popup / none: open the app only" },
-  { name: "ciphertext", kind: "text", group: "encryption", description: "Encrypted push payload" },
-  { name: "iv", kind: "text", group: "encryption", description: "IV used for the ciphertext" },
   // isArchive は 1 で保存、それ以外の値で保存しない (未指定はアプリ設定に従う) ので 0 も意味を持つ
   { name: "isArchive", kind: "enum", values: ["1", "0"], group: "archive", description: "1: save to history / 0: do not save" },
   { name: "ttl", kind: "integer", min: 1, group: "archive", description: "Seconds to keep the archived message" },

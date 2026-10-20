@@ -3,10 +3,10 @@ import { archiveDevice, matchTags, patchDevice, resolveTargets, selectDevices, u
 import type { Devices } from "../src/schema/registry.ts";
 
 const devices: Devices = {
-  A: { device_token: "ta", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone", family: "kawazu" } },
-  B: { device_token: "tb", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "ipad", family: "kawazu" } },
-  C: { device_token: "tc", registered_at: "t0", archived_at: null, tags: { owner: "other", family: "kawazu" } },
-  D: { device_token: "td", registered_at: "t0", archived_at: "t1", tags: { owner: "kawaz", name: "old" } },
+  A: { device_token: "ta", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone", family: "kawazu" }, crypto: null },
+  B: { device_token: "tb", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "ipad", family: "kawazu" }, crypto: null },
+  C: { device_token: "tc", registered_at: "t0", archived_at: null, tags: { owner: "other", family: "kawazu" }, crypto: null },
+  D: { device_token: "td", registered_at: "t0", archived_at: "t1", tags: { owner: "kawaz", name: "old" }, crypto: null },
 };
 
 describe("matchTags", () => {
@@ -29,7 +29,7 @@ describe("selectDevices", () => {
   });
   test("view carries device_id", () => {
     expect(selectDevices(devices, { name: "iphone" }, false)).toEqual([
-      { device_id: "A", device_token: "ta", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone", family: "kawazu" } },
+      { device_id: "A", device_token: "ta", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone", family: "kawazu" }, crypto: null },
     ]);
   });
 });
@@ -45,19 +45,19 @@ describe("resolveTargets", () => {
 
 describe("upsertRegistration", () => {
   test("new device gets tags and registered_at", () => {
-    const r = upsertRegistration(devices, { deviceId: "E", deviceToken: "te", tags: { owner: "x" }, now: "t2" });
+    const r = upsertRegistration(devices, { deviceId: "E", deviceToken: "te", tags: { owner: "x" }, crypto: null, now: "t2" });
     expect(r.created).toBe(true);
-    expect(r.devices["E"]).toEqual({ device_token: "te", registered_at: "t2", archived_at: null, tags: { owner: "x" } });
+    expect(r.devices["E"]).toEqual({ device_token: "te", registered_at: "t2", archived_at: null, tags: { owner: "x" }, crypto: null });
   });
   test("existing device only updates the token", () => {
-    const r = upsertRegistration(devices, { deviceId: "D", deviceToken: "new", tags: { owner: "x" }, now: "t2" });
+    const r = upsertRegistration(devices, { deviceId: "D", deviceToken: "new", tags: { owner: "x" }, crypto: null, now: "t2" });
     expect(r.created).toBe(false);
-    expect(r.devices["D"]).toEqual({ device_token: "new", registered_at: "t0", archived_at: "t1", tags: { owner: "kawaz", name: "old" } });
+    expect(r.devices["D"]).toEqual({ device_token: "new", registered_at: "t0", archived_at: "t1", tags: { owner: "kawaz", name: "old" }, crypto: null });
   });
 });
 
 describe("patch / archive", () => {
-  const a = { device_token: "ta", registered_at: "t0", archived_at: null, tags: { owner: "kawaz" } };
+  const a = { device_token: "ta", registered_at: "t0", archived_at: null, tags: { owner: "kawaz" }, crypto: null };
   test("tags are replaced, not merged", () => expect(patchDevice(a, { tags: { name: "n" } }).tags).toEqual({ name: "n" }));
   test("archived_at null restores", () => expect(patchDevice({ ...a, archived_at: "t1" }, { archived_at: null }).archived_at).toBeNull());
   test("archive sets archived_at once", () => {

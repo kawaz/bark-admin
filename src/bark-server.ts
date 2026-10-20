@@ -25,6 +25,12 @@ const BatchPushResponseSchema = v.looseObject({
   ),
 });
 
+// device_key 1 台の送信は data を持たず、結果は code / message (HTTP status も code と同じ)
+const SinglePushResponseSchema = v.looseObject({ code: v.number(), message: v.optional(v.string()) });
+
+// /bark-admin/push の device ごとの結果
+export type PushResult = { device_id: string; status: number; message?: string };
+
 export type Upstream = { status: number; contentType: string | null; body: string };
 
 export class UpstreamError extends Error {}
@@ -56,7 +62,7 @@ export class BarkServer {
   async pushBatch(
     params: PushParams,
     deviceKeys: string[],
-  ): Promise<{ ok: true; results: { device_id: string; status: number; message?: string }[] } | { ok: false; status: number; message: string }> {
+  ): Promise<{ ok: true; results: PushResult[] } | { ok: false; status: number; message: string }> {
     const up = await this.forward(
       "POST",
       "/push",
@@ -75,6 +81,18 @@ export class BarkServer {
         status: d.code,
         ...(d.message !== undefined ? { message: d.message } : {}),
       })),
+    };
+  }
+
+  // 暗号化した 1 台分を device_key で送る。平文のパラメータは ciphertext の中にだけある
+  async pushEncrypted(deviceKey: string, sealed: { ciphertext: string; iv: string }): Promise<PushResult> {
+    const up = await this.forward("POST", "/push", "application/json; charset=utf-8", JSON.stringify({ device_key: deviceKey, ...sealed }));
+    const r = parseJsonWith(SinglePushResponseSchema, up.body);
+    if (!r.ok) return { device_id: deviceKey, status: up.status, message: `unexpected bark-server response: ${r.error.message}` };
+    return {
+      device_id: deviceKey,
+      status: r.value.code,
+      ...(r.value.code !== 200 && r.value.message !== undefined ? { message: r.value.message } : {}),
     };
   }
 }

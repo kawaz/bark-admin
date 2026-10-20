@@ -34,15 +34,17 @@ describe("pushParamsSchema", () => {
     ["flag must be 1", { call: "0" }],
     ["icon must be url", { icon: "not a url" }],
     ["delete requires id", { delete: "1" }],
+    ["ciphertext is built by bark-admin", { ciphertext: "x" }],
+    ["iv is built by bark-admin", { iv: "x" }],
   ])("rejects: %s", (_, input) => {
     expect(v.safeParse(pushParamsSchema, input).success).toBe(false);
   });
 
-  test("covers every param listed in DESIGN.md and the bark docs", () => {
+  test("covers every plain param listed in DESIGN.md and the bark docs", () => {
     expect(pushParamFields.map((f) => f.name).toSorted()).toEqual(
       [
         "title", "subtitle", "body", "markdown", "sound", "icon", "image", "group", "level", "volume", "badge", "call",
-        "url", "copy", "autoCopy", "isArchive", "ttl", "action", "id", "delete", "ciphertext", "iv",
+        "url", "copy", "autoCopy", "isArchive", "ttl", "action", "id", "delete",
       ].toSorted(),
     );
   });

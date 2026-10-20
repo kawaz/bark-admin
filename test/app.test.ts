@@ -7,11 +7,13 @@ import { createApp } from "../src/app.ts";
 import { BarkServer } from "../src/bark-server.ts";
 import { parseJsonWith } from "../src/parse.ts";
 import { openStore, type Store } from "../src/store.ts";
+import { nodeDecrypt } from "./node-aes-gcm.ts";
 
 // 偽 bark-server: 届いた要求を記録し、bark-server v2.3.9 と同じ形で応答する
 type Received = { method: string; path: string; search: string; body: string };
 const received: Received[] = [];
 const BodySchema = v.looseObject({ device_keys: v.optional(v.array(v.string())) });
+const SealedBodySchema = v.strictObject({ device_key: v.string(), ciphertext: v.string(), iv: v.string() });
 
 const fakeBark = Bun.serve({
   port: 0,
@@ -30,7 +32,11 @@ const fakeBark = Bun.serve({
     if (url.pathname === "/push") {
       const r = parseJsonWith(BodySchema, body);
       const keys = r.ok ? (r.value.device_keys ?? []) : [];
-      if (keys.length === 0) return Response.json({ code: 200, message: "success", timestamp: ts });
+      // device_key 1 台の送信: 失敗は HTTP status と code が同じ値になる
+      if (keys.length === 0) {
+        if (body.includes('"device_key":"BADENC"')) return Response.json({ code: 400, message: "failed to get device token", timestamp: ts }, { status: 400 });
+        return Response.json({ code: 200, message: "success", timestamp: ts });
+      }
       return Response.json({
         code: 200,
         message: "success",
@@ -57,10 +63,10 @@ beforeEach(async () => {
   store = openStore(join(dir, "devices.json"));
   await store.devices.update(() => ({
     next: {
-      A: { device_token: "ta", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" } },
-      B: { device_token: "tb", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "ipad" } },
-      C: { device_token: "tc", registered_at: "t0", archived_at: null, tags: { owner: "other" } },
-      D: { device_token: "td", registered_at: "t0", archived_at: "t1", tags: { owner: "kawaz", name: "old" } },
+      A: { device_token: "ta", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, crypto: null },
+      B: { device_token: "tb", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "ipad" }, crypto: null },
+      C: { device_token: "tc", registered_at: "t0", archived_at: null, tags: { owner: "other" }, crypto: null },
+      D: { device_token: "td", registered_at: "t0", archived_at: "t1", tags: { owner: "kawaz", name: "old" }, crypto: null },
     },
     result: null,
   }));
@@ -77,6 +83,24 @@ function post(path: string, body: unknown, method = "POST") {
   return fetch(`${base}${path}`, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 }
 
+const KEY_A = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const KEY_B = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+
+async function setCrypto(id: string, key: string) {
+  await store.devices.update((cur) => {
+    const rec = cur[id];
+    return rec === undefined ? { result: null } : { next: { ...cur, [id]: { ...rec, crypto: { key } } }, result: null };
+  });
+}
+
+// device_key 1 台で届いた暗号化の送信
+function sealedPushes() {
+  return received.filter((r) => r.path === "/push").flatMap((r) => {
+    const p = parseJsonWith(SealedBodySchema, r.body);
+    return p.ok ? [p.value] : [];
+  });
+}
+
 function pushedKeys(): string[][] {
   return received
     .filter((r) => r.path === "/push")
@@ -90,7 +114,13 @@ describe("POST /bark-admin/push", () => {
   test("device filter resolves active devices and sends one batch with device_keys", async () => {
     const res = await post("/bark-admin/push", { device: { owner: "kawaz" }, title: "t", body: "b" });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ sent: [{ device_id: "A", status: 200 }, { device_id: "B", status: 200 }], skipped: 1 });
+    expect(await res.json()).toEqual({
+      sent: [
+        { device_id: "A", status: 200, encrypted: false },
+        { device_id: "B", status: 200, encrypted: false },
+      ],
+      skipped: 1,
+    });
     expect(pushedKeys()).toEqual([["A", "B"]]);
     const sent = received.find((r) => r.path === "/push");
     expect(sent && JSON.parse(sent.body)).toEqual({ title: "t", body: "b", device_keys: ["A", "B"] });
@@ -113,9 +143,9 @@ describe("POST /bark-admin/push", () => {
   });
 
   test("per-device failure is reported in sent", async () => {
-    await store.devices.update((cur) => ({ next: { ...cur, BAD: { device_token: "x", registered_at: "t0", archived_at: null, tags: { owner: "z" } } }, result: null }));
+    await store.devices.update((cur) => ({ next: { ...cur, BAD: { device_token: "x", registered_at: "t0", archived_at: null, tags: { owner: "z" }, crypto: null } }, result: null }));
     const res = await post("/bark-admin/push", { device: { owner: "z" }, body: "b" });
-    expect(await res.json()).toEqual({ sent: [{ device_id: "BAD", status: 400, message: "failed to get device token" }], skipped: 0 });
+    expect(await res.json()).toEqual({ sent: [{ device_id: "BAD", status: 400, message: "failed to get device token", encrypted: false }], skipped: 0 });
   });
 
   test("device_key / device_keys are rejected (destinations are given by device)", async () => {
@@ -127,6 +157,59 @@ describe("POST /bark-admin/push", () => {
   test("invalid params are rejected before bark-server", async () => {
     const res = await post("/bark-admin/push", { body: "b", level: "loud" });
     expect(res.status).toBe(400);
+    expect(received).toHaveLength(0);
+  });
+});
+
+describe("POST /bark-admin/push to devices with a crypto key", () => {
+  test("encrypted devices get {device_key, ciphertext, iv} one by one, the rest one batch", async () => {
+    await setCrypto("A", KEY_A);
+    await setCrypto("C", KEY_B);
+    const res = await post("/bark-admin/push", { title: "t", body: "b", badge: 2 });
+    expect(res.status).toBe(200);
+    // 宛先の並び順で、暗号化したかどうかが付く
+    expect(await res.json()).toEqual({
+      sent: [
+        { device_id: "A", status: 200, encrypted: true },
+        { device_id: "B", status: 200, encrypted: false },
+        { device_id: "C", status: 200, encrypted: true },
+      ],
+      skipped: 1,
+    });
+    expect(pushedKeys().filter((k) => k.length > 0)).toEqual([["B"]]);
+    const sealed = sealedPushes().toSorted((x, y) => x.device_key.localeCompare(y.device_key));
+    expect(sealed.map((p) => p.device_key)).toEqual(["A", "C"]);
+    for (const [p, key] of [
+      [sealed[0], KEY_A],
+      [sealed[1], KEY_B],
+    ] as const) {
+      expect(p?.iv).toMatch(/^[A-Za-z0-9]{12}$/);
+      // 平文は device / device_key を含まない bark パラメータ全体
+      expect(p && JSON.parse(nodeDecrypt(key, p.iv, p.ciphertext))).toEqual({ title: "t", body: "b", badge: 2 });
+    }
+    expect(sealed[0]?.iv).not.toBe(sealed[1]?.iv);
+  });
+
+  test("only encrypted targets: bark-server gets no batch", async () => {
+    await setCrypto("A", KEY_A);
+    const res = await post("/bark-admin/push", { device: { name: "iphone" }, body: "b" });
+    expect(await res.json()).toEqual({ sent: [{ device_id: "A", status: 200, encrypted: true }], skipped: 0 });
+    expect(pushedKeys()).toEqual([[]]);
+    expect(sealedPushes()).toHaveLength(1);
+  });
+
+  test("per-device failure of an encrypted push is reported", async () => {
+    await store.devices.update((cur) => ({
+      next: { ...cur, BADENC: { device_token: "x", registered_at: "t0", archived_at: null, tags: { owner: "z" }, crypto: { key: KEY_A } } },
+      result: null,
+    }));
+    const res = await post("/bark-admin/push", { device: { owner: "z" }, body: "b" });
+    expect(await res.json()).toEqual({ sent: [{ device_id: "BADENC", status: 400, message: "failed to get device token", encrypted: true }], skipped: 0 });
+  });
+
+  test("ciphertext / iv in the body are rejected", async () => {
+    expect((await post("/bark-admin/push", { ciphertext: "x", body: "b" })).status).toBe(400);
+    expect((await post("/bark-admin/push", { iv: "x", body: "b" })).status).toBe(400);
     expect(received).toHaveLength(0);
   });
 });
@@ -157,6 +240,39 @@ describe("devices API", () => {
     expect(await (await post("/bark-admin/api/devices/A", { archived_at: null }, "PATCH")).json()).toMatchObject({ archived_at: null });
   });
 
+  test("the list shows only whether a device is encrypted, the detail shows the key", async () => {
+    await setCrypto("A", KEY_A);
+    const lines = (await (await fetch(`${base}/bark-admin/api/devices?name=iphone`)).text()).split("\n").filter((l) => l !== "");
+    expect(lines.map((l) => JSON.parse(l))).toEqual([
+      { device_id: "A", device_token: "ta", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, encrypted: true },
+    ]);
+    expect(lines.join("")).not.toContain(KEY_A);
+    expect(await (await fetch(`${base}/bark-admin/api/devices/A`)).json()).toMatchObject({ crypto: { key: KEY_A } });
+    expect(await (await fetch(`${base}/bark-admin/api/devices/B`)).json()).toMatchObject({ crypto: null });
+  });
+
+  test("POST /crypto generates and stores a new key, PATCH sets or clears it", async () => {
+    const CryptoView = v.object({ crypto: v.object({ key: v.string() }) });
+    const first = v.parse(CryptoView, await (await fetch(`${base}/bark-admin/api/devices/A/crypto`, { method: "POST" })).json()).crypto.key;
+    expect(first).toMatch(/^[A-Za-z0-9]{32}$/);
+    expect((await store.devices.read())["A"]?.crypto).toEqual({ key: first });
+    const second = v.parse(CryptoView, await (await fetch(`${base}/bark-admin/api/devices/A/crypto`, { method: "POST" })).json()).crypto.key;
+    expect(second).not.toBe(first);
+
+    expect(await (await post("/bark-admin/api/devices/A", { crypto: { key: KEY_B } }, "PATCH")).json()).toMatchObject({ crypto: { key: KEY_B } });
+    expect(await (await post("/bark-admin/api/devices/A", { crypto: null }, "PATCH")).json()).toMatchObject({ crypto: null });
+    expect((await fetch(`${base}/bark-admin/api/devices/NOPE/crypto`, { method: "POST" })).status).toBe(404);
+  });
+
+  test.each([
+    ["too short", "abc"],
+    ["33 characters", `${KEY_A}A`],
+    ["not alphanumeric", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA-"],
+  ])("PATCH rejects a crypto key that is %s", async (_, key) => {
+    expect((await post("/bark-admin/api/devices/A", { crypto: { key } }, "PATCH")).status).toBe(400);
+    expect((await store.devices.read())["A"]?.crypto).toBeNull();
+  });
+
   test("unknown device is 404", async () => {
     expect((await fetch(`${base}/bark-admin/api/devices/NOPE`)).status).toBe(404);
     expect((await fetch(`${base}/bark-admin/api/devices/NOPE`, { method: "DELETE" })).status).toBe(404);
@@ -164,11 +280,37 @@ describe("devices API", () => {
 });
 
 describe("register via invite", () => {
-  async function invite(tags: Record<string, string>) {
-    const res = await post("/bark-admin/api/invites", { tags });
+  async function invite(tags: Record<string, string>, encrypt?: boolean) {
+    const res = await post("/bark-admin/api/invites", { tags, ...(encrypt === undefined ? {} : { encrypt }) });
     expect(res.status).toBe(201);
-    return v.parse(v.object({ invite: v.string(), add_url: v.string(), addserver_url: v.string() }), await res.json());
+    return v.parse(
+      v.object({ invite: v.string(), add_url: v.string(), addserver_url: v.string(), crypto: v.nullable(v.object({ key: v.string() })) }),
+      await res.json(),
+    );
   }
+
+  test("encrypt: true puts a key on the invite, shows it on the add page and copies it to the registered device", async () => {
+    const inv = await invite({ name: "enc" }, true);
+    const key = inv.crypto?.key ?? "";
+    expect(key).toMatch(/^[A-Za-z0-9]{32}$/);
+    expect((await store.invites.read())[inv.invite]?.crypto).toEqual({ key });
+    const page = await (await fetch(`${base}/bark-admin/add/${inv.invite}`)).text();
+    expect(page).toContain("暗号化キー");
+    expect(page).toContain(key);
+
+    await fetch(`${base}/r/${inv.invite}/register?devicetoken=tok&key=`);
+    expect((await store.devices.read())["NEWKEY"]?.crypto).toEqual({ key });
+    // 使用済みの招待ページには鍵を出さない
+    expect(await (await fetch(`${base}/bark-admin/add/${inv.invite}`)).text()).not.toContain(key);
+  });
+
+  test("without encrypt the invite has no key and the add page has no key section", async () => {
+    const inv = await invite({ name: "plain" });
+    expect(inv.crypto).toBeNull();
+    expect(await (await fetch(`${base}/bark-admin/add/${inv.invite}`)).text()).not.toContain("暗号化キー");
+    await fetch(`${base}/r/${inv.invite}/register?devicetoken=tok&key=`);
+    expect((await store.devices.read())["NEWKEY"]?.crypto).toBeNull();
+  });
 
   test("invite URLs embed the invite in the server address", async () => {
     const inv = await invite({ owner: "kawaz" });
@@ -187,7 +329,7 @@ describe("register via invite", () => {
     const res = await fetch(`${base}/r/${inv.invite}/register?devicetoken=tok&key=`);
     expect(res.status).toBe(200);
     expect(received.at(-1)).toMatchObject({ method: "GET", path: "/register", search: "?devicetoken=tok&key=" });
-    expect((await store.devices.read())["NEWKEY"]).toEqual({ device_token: "tok", registered_at: "NOW", archived_at: null, tags: { owner: "kawaz", name: "new" } });
+    expect((await store.devices.read())["NEWKEY"]).toEqual({ device_token: "tok", registered_at: "NOW", archived_at: null, tags: { owner: "kawaz", name: "new" }, crypto: null });
     expect((await store.invites.read())[inv.invite]?.used_by).toBe("NEWKEY");
 
     // 使った本人の再登録 (アプリ起動時) は通り、token だけ更新される
@@ -211,7 +353,7 @@ describe("register via invite", () => {
     await fetch(`${base}/register?devicetoken=t1&key=`);
     expect((await store.devices.read())["NEWKEY"]?.tags).toEqual({});
     await fetch(`${base}/register?devicetoken=t9&key=A`);
-    expect((await store.devices.read())["A"]).toEqual({ device_token: "t9", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" } });
+    expect((await store.devices.read())["A"]).toEqual({ device_token: "t9", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, crypto: null });
   });
 
   test("bark-server errors are passed through without touching the registry", async () => {

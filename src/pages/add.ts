@@ -7,7 +7,7 @@ function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
-function page(title: string, main: string): string {
+function page(title: string, main: string, script = ""): string {
   return `<!doctype html>
 <html lang="ja">
 <head>
@@ -16,7 +16,7 @@ function page(title: string, main: string): string {
 <title>${esc(title)}</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/bark-admin/assets/style.css">
-</head>
+${script === "" ? "" : `<script type="module" src="/bark-admin/assets/${script}"></script>\n`}</head>
 <body>
 <main class="invite">
 ${main}
@@ -26,7 +26,21 @@ ${main}
 `;
 }
 
-export function addPageHtml(p: { addserverUrl: string; tags: Record<string, string>; used: boolean }): string {
+// 鍵は Bark アプリの暗号化設定に手で貼る。使用済みの招待では見せない (鍵は登録した端末の詳細画面にある)
+function cryptoSection(key: string): string {
+  return `<section class="crypto stack" aria-labelledby="crypto-heading">
+<h2 id="crypto-heading">暗号化キー</h2>
+<p>この端末への通知は暗号化して送る。Bark に次の鍵を設定すると読める。</p>
+<div class="key-row"><code id="crypto-key" class="key">${esc(key)}</code><button type="button" class="secondary" data-copy="crypto-key">コピー</button></div>
+<ol class="steps">
+<li>Bark のホームで「推送加密 / Push Encryption」を開く</li>
+<li>Algorithm を AES256、Mode を GCM、Padding を noPadding にする</li>
+<li>Key に上の鍵を貼って保存する</li>
+</ol>
+</section>`;
+}
+
+export function addPageHtml(p: { addserverUrl: string; tags: Record<string, string>; used: boolean; cryptoKey: string | null }): string {
   if (p.used) {
     return page(
       "bark-admin: 使用済みの招待",
@@ -45,10 +59,11 @@ export function addPageHtml(p: { addserverUrl: string; tags: Record<string, stri
 <p>Bark に切り替わったら、サーバの追加を確定する。この端末が${tags === "" ? "タグなしで" : "次のタグで"}登録される。</p>
 ${tags === "" ? "" : `<ul class="tags">${tags}</ul>`}
 </div>
-<div class="install">
+${p.cryptoKey === null ? "" : `${cryptoSection(p.cryptoKey)}\n`}<div class="install">
 <p class="hint">Bark が入っていなければ、先に入れてから「Bark で開く」を押す。</p>
 <a class="button secondary" href="${esc(APP_STORE_URL)}">App Store で Bark を入れる</a>
 </div>`,
+    p.cryptoKey === null ? "" : "add.js",
   );
 }
 

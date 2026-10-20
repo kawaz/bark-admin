@@ -48,3 +48,18 @@ export function el(tag, props = {}, ...children) {
   node.append(...children);
   return node;
 }
+
+// text をクリップボードへ写し、押したボタンの文言で結果を返す (少し経つと元の文言に戻す)
+export async function copyText(button, text) {
+  const label = button.dataset.label ?? button.textContent;
+  button.dataset.label = label;
+  try {
+    await navigator.clipboard.writeText(text);
+    button.textContent = "コピーした";
+  } catch {
+    button.textContent = "コピーできなかった。長押しで選ぶ";
+  }
+  setTimeout(() => {
+    button.textContent = label;
+  }, 2000);
+}

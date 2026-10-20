@@ -2,12 +2,13 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import QRCode from "qrcode";
 import * as v from "valibot";
-import { BarkServer, RegisterResponseSchema, UpstreamError } from "./bark-server.ts";
+import { BarkServer, RegisterResponseSchema, UpstreamError, type PushResult } from "./bark-server.ts";
 import { addPageHtml, notFoundPageHtml } from "./pages/add.ts";
 import { parseJsonWith, parseWith } from "./parse.ts";
-import { archiveDevice, patchDevice, resolveTargets, selectDevices, upsertRegistration } from "./registry.ts";
-import { pushParamFields, pushParamsSchema } from "./schema/push-params.ts";
-import { CreateInviteSchema, PatchDeviceSchema, TagsSchema, type DeviceRecord, type Tags } from "./schema/registry.ts";
+import { encryptForBark, newCryptoIv, newCryptoKey } from "./push-crypto.ts";
+import { archiveDevice, listItem, patchDevice, resolveTargets, selectDevices, upsertRegistration } from "./registry.ts";
+import { pushParamFields, pushParamsSchema, type PushParams } from "./schema/push-params.ts";
+import { CreateInviteSchema, PatchDeviceSchema, TagsSchema, type DeviceCrypto, type DeviceRecord, type Tags } from "./schema/registry.ts";
 import type { Store } from "./store.ts";
 import { localIso } from "./time.ts";
 
@@ -98,6 +99,7 @@ export function createApp(deps: AppDeps) {
     const isRegister = path === "/register";
 
     let inviteTags: Tags = {};
+    let inviteCrypto: DeviceCrypto | null = null;
     let inviteUnused = false;
     if (invite !== null) {
       const rec = (await store.invites.read())[invite];
@@ -109,6 +111,7 @@ export function createApp(deps: AppDeps) {
           return barkError(410, "invite already used. Ask for a new invite link");
         }
         inviteTags = rec.tags;
+        inviteCrypto = rec.crypto;
         inviteUnused = rec.used_by === null;
       }
     }
@@ -117,15 +120,22 @@ export function createApp(deps: AppDeps) {
       const up = await bark.forward(req.method, `${path}${url.search}`, contentType, body);
       if (isRegister && up.status === 200) {
         const reg = parseJsonWith(RegisterResponseSchema, up.body);
-        if (reg.ok && reg.value.code === 200) await recordRegistration(reg.value.data.device_key, reg.value.data.device_token, inviteTags, invite, inviteUnused);
+        if (reg.ok && reg.value.code === 200) await recordRegistration(reg.value.data.device_key, reg.value.data.device_token, inviteTags, inviteCrypto, invite, inviteUnused);
       }
       return upstreamResponse(up);
     });
   }
 
-  async function recordRegistration(deviceId: string, deviceToken: string, tags: Tags, invite: string | null, inviteUnused: boolean) {
+  async function recordRegistration(
+    deviceId: string,
+    deviceToken: string,
+    tags: Tags,
+    crypto: DeviceCrypto | null,
+    invite: string | null,
+    inviteUnused: boolean,
+  ) {
     const at = now();
-    await store.devices.update((cur) => ({ next: upsertRegistration(cur, { deviceId, deviceToken, tags, now: at }).devices, result: null }));
+    await store.devices.update((cur) => ({ next: upsertRegistration(cur, { deviceId, deviceToken, tags, crypto, now: at }).devices, result: null }));
     if (invite !== null && inviteUnused) {
       await store.invites.update((cur) => {
         const rec = cur[invite];
@@ -142,19 +152,45 @@ export function createApp(deps: AppDeps) {
     const env = parseJsonWith(AdminPushEnvelopeSchema, await req.text());
     if (!env.ok) return json(400, { error: env.error.message });
     const { device, ...rest } = env.value;
+    if ("ciphertext" in rest || "iv" in rest) {
+      return json(400, { error: "ciphertext / iv cannot be given. Send plain parameters; devices with a crypto key get them encrypted by bark-admin" });
+    }
     // device_key / device_keys は pushParamsSchema に無いのでここで 400 になる (宛先は device で指定する)
     const params = parseWith(pushParamsSchema, rest);
     if (!params.ok) return json(400, { error: params.error.message });
 
-    const { deviceIds, skipped } = resolveTargets(await store.devices.read(), device ?? {});
+    const devices = await store.devices.read();
+    const { deviceIds, skipped } = resolveTargets(devices, device ?? {});
     if (deviceIds.length === 0) {
       return json(404, { error: `no active device matches the device filter. Check GET ${ADMIN}/api/devices`, sent: [], skipped });
     }
+    // 鍵を持つ端末は 1 台ずつ暗号化して送り、残りは device_keys で一括
+    const encrypted: { id: string; key: string }[] = [];
+    const plain: string[] = [];
+    for (const id of deviceIds) {
+      const c = devices[id]?.crypto ?? null;
+      if (c === null) plain.push(id);
+      else encrypted.push({ id, key: c.key });
+    }
     return withUpstream(async () => {
-      const r = await bark.pushBatch(params.value, deviceIds);
-      if (!r.ok) return json(502, { error: r.message, upstream_status: r.status });
-      return json(200, { sent: r.results, skipped });
+      const [batch, sealed] = await Promise.all([
+        plain.length === 0 ? Promise.resolve(null) : bark.pushBatch(params.value, plain),
+        Promise.all(encrypted.map((t) => pushEncrypted(params.value, t))),
+      ]);
+      if (batch !== null && !batch.ok) return json(502, { error: batch.message, upstream_status: batch.status });
+      const results = new Map<string, PushResult & { encrypted: boolean }>();
+      for (const r of batch?.results ?? []) results.set(r.device_id, { ...r, encrypted: false });
+      for (const r of sealed) results.set(r.device_id, { ...r, encrypted: true });
+      // 結果は宛先の並び順で返す
+      const sent = deviceIds.flatMap((id) => results.get(id) ?? []);
+      return json(200, { sent, skipped });
     });
+  }
+
+  async function pushEncrypted(params: PushParams, target: { id: string; key: string }): Promise<PushResult> {
+    const iv = newCryptoIv();
+    const ciphertext = await encryptForBark(target.key, iv, JSON.stringify(params));
+    return bark.pushEncrypted(target.id, { ciphertext, iv });
   }
 
   async function listDevices(req: Request): Promise<Response> {
@@ -167,7 +203,7 @@ export function createApp(deps: AppDeps) {
       filter[key] = vals[0] ?? "";
     }
     const list = selectDevices(await store.devices.read(), filter, q.get("archived") === "1");
-    const body = list.map((d) => `${JSON.stringify(d)}\n`).join("");
+    const body = list.map((d) => `${JSON.stringify(listItem(d))}\n`).join("");
     return new Response(body, { headers: { "content-type": "application/jsonl; charset=utf-8" } });
   }
 
@@ -186,11 +222,12 @@ export function createApp(deps: AppDeps) {
     if (!r.ok) return json(400, { error: r.error.message });
     const invite = newInviteId();
     const createdAt = now();
+    const crypto = r.value.encrypt ? { key: newCryptoKey() } : null;
     await store.invites.update((cur) => ({
-      next: { ...cur, [invite]: { tags: r.value.tags, created_at: createdAt, used_by: null } },
+      next: { ...cur, [invite]: { tags: r.value.tags, created_at: createdAt, used_by: null, crypto } },
       result: null,
     }));
-    return json(201, { invite, ...inviteUrls(serverUrl, invite) });
+    return json(201, { invite, ...inviteUrls(serverUrl, invite), crypto });
   }
 
   async function inviteQr(invite: string): Promise<Response> {
@@ -202,7 +239,7 @@ export function createApp(deps: AppDeps) {
   async function addPage(invite: string): Promise<Response> {
     const rec = (await store.invites.read())[invite];
     if (rec === undefined) return html(404, notFoundPageHtml("この招待リンクは登録簿にない。管理画面で招待を作り直す。"));
-    return html(200, addPageHtml({ addserverUrl: inviteUrls(serverUrl, invite).addserver_url, tags: rec.tags, used: rec.used_by !== null }));
+    return html(200, addPageHtml({ addserverUrl: inviteUrls(serverUrl, invite).addserver_url, tags: rec.tags, used: rec.used_by !== null, cryptoKey: rec.crypto?.key ?? null }));
   }
 
   const assets = Object.fromEntries(
@@ -232,6 +269,13 @@ export function createApp(deps: AppDeps) {
       DELETE: (req: Bun.BunRequest<"/bark-admin/api/devices/:id">) => {
         const at = now();
         return updateDevice(req.params.id, (rec) => archiveDevice(rec, at));
+      },
+    },
+    // 鍵を作り直して保存し、鍵入りの device を返す (詳細画面の「鍵を作り直す」/「暗号化する」)
+    [`${ADMIN}/api/devices/:id/crypto`]: {
+      POST: (req: Bun.BunRequest<"/bark-admin/api/devices/:id/crypto">) => {
+        const key = newCryptoKey();
+        return updateDevice(req.params.id, (rec) => ({ ...rec, crypto: { key } }));
       },
     },
     [`${ADMIN}/api/invites`]: { POST: createInvite },
