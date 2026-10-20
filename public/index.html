@@ -4,51 +4,71 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>bark-admin</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="/bark-admin/assets/style.css">
 <script type="module" src="/bark-admin/assets/index.js"></script>
 </head>
 <body>
-<header><h1>bark-admin</h1></header>
-<main>
-  <section id="filter-section">
-    <h2>フィルタ</h2>
-    <p class="hint">1 行に 1 つ <code>key=value</code>。全部に一致する端末が対象 (空なら全台)。一覧とテスト送信の両方に効く。</p>
-    <textarea id="filter" rows="3" placeholder="owner=kawaz"></textarea>
-    <label class="inline"><input type="checkbox" id="show-archived"> 退役済みも表示</label>
-  </section>
+<header class="site"><a class="wordmark" href="/bark-admin/">bark-admin</a></header>
+<main class="top">
+  <div class="top-columns">
+    <section class="roster" aria-labelledby="roster-heading">
+      <div class="target">
+        <label for="filter">宛先</label>
+        <textarea id="filter" class="kv" rows="1" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="owner=kawaz" aria-describedby="filter-hint filter-error"></textarea>
+        <output id="match-count" class="count" for="filter"></output>
+        <p id="filter-hint" class="hint">1 行に 1 つ <code>key=value</code>。全部に一致する端末へ送る。空なら全台。一覧のタグを押しても足せる</p>
+        <p id="filter-error" class="error" role="alert" hidden></p>
+        <label class="check"><input type="checkbox" id="show-archived"> 退役済みも表示</label>
+      </div>
 
-  <section id="devices-section">
-    <h2>デバイス <span id="device-count" class="count"></span></h2>
-    <table id="devices">
-      <thead><tr><th>device_id</th><th>owner</th><th>name</th><th>tags</th><th>registered_at</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <p id="devices-empty" class="hint" hidden>該当するデバイスはありません。フィルタを緩めるか、下の「デバイス追加」で招待を作ってください。</p>
-  </section>
+      <div class="roster-head">
+        <h2 id="roster-heading">デバイス</h2>
+        <button type="button" class="secondary" commandfor="invite-dialog" command="show-modal">デバイスを追加</button>
+      </div>
+      <div class="devices-grid">
+        <div class="devices-head" aria-hidden="true"><span>name / device_id</span><span>owner</span><span>tags</span><span>registered_at</span></div>
+        <ul id="devices" class="devices"></ul>
+      </div>
+      <p id="devices-empty" class="empty" hidden></p>
+    </section>
 
-  <section id="push-section">
-    <h2>通知テスト</h2>
-    <form id="push-form">
-      <div id="push-fields"></div>
-      <button type="submit">フィルタに当たる全台へ送信</button>
-    </form>
-    <pre id="push-result" hidden></pre>
-  </section>
-
-  <section id="invite-section">
-    <h2>デバイス追加</h2>
-    <form id="invite-form">
-      <p class="hint">新しい端末に付けるタグを 1 行に 1 つ <code>key=value</code> で。</p>
-      <textarea id="invite-tags" rows="3" placeholder="owner=kawaz&#10;name=ipad"></textarea>
-      <button type="submit">招待を作る</button>
-    </form>
-    <div id="invite-result" hidden>
-      <img id="invite-qr" alt="招待 QR コード" width="240" height="240">
-      <p>iPhone / iPad のカメラで読み取るか、端末で次の URL を開く:</p>
-      <p><a id="invite-add-url"></a></p>
-      <p class="hint">Bark が入った端末で直接追加: <a id="invite-addserver-url">Bark で開く</a></p>
-    </div>
-  </section>
+    <section class="composer" aria-labelledby="composer-heading">
+      <h2 id="composer-heading">通知を送る</h2>
+      <p class="target-echo" id="target-echo"></p>
+      <form id="push-form">
+        <div id="primary-fields" class="fields"></div>
+        <details class="more-fields">
+          <summary>ほかの項目 <span id="more-filled" class="filled"></span></summary>
+          <div id="more-fields"></div>
+        </details>
+        <button type="submit" id="send" class="send">送る</button>
+      </form>
+      <div id="push-result" class="result" aria-live="polite"></div>
+    </section>
+  </div>
 </main>
+
+<dialog id="invite-dialog" closedby="any" aria-labelledby="invite-heading">
+  <div class="dialog-head">
+    <h2 id="invite-heading">デバイスを追加</h2>
+    <button type="button" class="secondary" commandfor="invite-dialog" command="close">閉じる</button>
+  </div>
+  <form id="invite-form">
+    <label for="invite-tags">新しい端末に付けるタグ</label>
+    <textarea id="invite-tags" class="kv" rows="3" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="owner=kawaz&#10;name=ipad" aria-describedby="invite-hint invite-error" autofocus></textarea>
+    <p id="invite-hint" class="hint">1 行に 1 つ <code>key=value</code>。あとから詳細画面で直せる</p>
+    <p id="invite-error" class="error" role="alert" hidden></p>
+    <div><button type="submit">招待を作る</button></div>
+  </form>
+  <div id="invite-result" class="invite-result" hidden>
+    <img id="invite-qr" alt="招待ページの QR コード" width="240" height="240">
+    <p>新しい端末のカメラで読み取る。開いたページで「Bark で開く」を押すと、このタグで登録される。</p>
+    <ul id="invite-tags-shown" class="tags"></ul>
+    <p class="url"><a id="invite-add-url"></a></p>
+    <p class="hint">この端末に Bark が入っているなら <a id="invite-addserver-url">Bark で開く</a></p>
+    <button type="button" id="invite-again" class="secondary">別の招待を作る</button>
+  </div>
+</dialog>
 </body>
 </html>

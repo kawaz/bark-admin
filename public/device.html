@@ -4,30 +4,50 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>bark-admin: デバイス</title>
+<link rel="icon" href="data:,">
 <link rel="stylesheet" href="/bark-admin/assets/style.css">
 <script type="module" src="/bark-admin/assets/device.js"></script>
 </head>
 <body>
-<header><h1><a href="/bark-admin/">bark-admin</a> / <span id="device-id"></span></h1></header>
-<main class="narrow">
-  <p id="error" class="notice" hidden></p>
-  <section id="detail" hidden>
-    <p id="archived-badge" class="notice" hidden>退役済み (<span id="archived-at"></span>)。送信対象と一覧から外れています。</p>
-    <dl>
-      <dt>registered_at</dt><dd id="registered-at"></dd>
-      <dt>device_token</dt><dd><code id="device-token"></code></dd>
+<header class="site"><a class="wordmark" href="/bark-admin/">bark-admin</a><span>/ デバイス</span></header>
+<main class="detail">
+  <p id="error" class="error" role="alert" hidden></p>
+  <div id="detail" class="detail-body" hidden>
+    <div id="archived-banner" class="banner" hidden>
+      <p>退役済み (<time id="archived-at"></time>)。送信対象と一覧から外れている</p>
+      <button id="restore" type="button">復帰させる</button>
+    </div>
+
+    <hgroup class="device-title">
+      <h1 id="device-name"></h1>
+      <p id="device-owner"></p>
+    </hgroup>
+
+    <dl class="facts">
+      <dt>device_id</dt>
+      <dd><code id="device-id"></code></dd>
+      <dt>registered_at</dt>
+      <dd><time id="registered-at"></time></dd>
+      <dt>device_token</dt>
+      <dd id="device-token"></dd>
     </dl>
-    <form id="tags-form">
-      <h2>タグ</h2>
-      <p class="hint">1 行に 1 つ <code>key=value</code>。保存すると全部置き換わる。</p>
-      <textarea id="tags" rows="6"></textarea>
-      <button type="submit">タグを保存</button>
-      <span id="tags-status" class="hint"></span>
+
+    <form id="tags-form" class="stack">
+      <h2><label for="tags">タグ</label></h2>
+      <textarea id="tags" class="kv" rows="4" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="tags-hint"></textarea>
+      <p id="tags-hint" class="hint">1 行に 1 つ <code>key=value</code>。保存すると全部置き換わる。<code>name</code> と <code>owner</code> が一覧の見出しになる</p>
+      <div class="actions">
+        <button type="submit">タグを保存</button>
+        <output id="tags-status" class="hint" for="tags"></output>
+      </div>
     </form>
-    <h2>退役</h2>
-    <button id="archive" type="button" class="danger">退役させる</button>
-    <button id="restore" type="button" hidden>復帰させる</button>
-  </section>
+
+    <section id="retire" class="retire stack" aria-labelledby="retire-heading">
+      <h2 id="retire-heading">退役</h2>
+      <p class="hint">送信対象と一覧から外す。登録は残るので、あとで復帰できる</p>
+      <button id="archive" type="button" class="danger">退役させる</button>
+    </section>
+  </div>
 </main>
 </body>
 </html>

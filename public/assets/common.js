@@ -19,6 +19,11 @@ export function formatTagLines(tags) {
     .join("\n");
 }
 
+// "2026-10-20T10:02:28+09:00" → "2026-10-20 10:02"。登録簿はローカル時刻で持つので、そのまま切り詰める
+export function formatAt(iso) {
+  return iso.slice(0, 16).replace("T", " ");
+}
+
 export function parseJsonl(text) {
   return text
     .split("\n")
