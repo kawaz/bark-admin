@@ -302,7 +302,7 @@ export function createApp(deps: AppDeps) {
     const r = parseJsonWith(CreateInviteSchema, await req.text());
     if (!r.ok) return json(400, { error: r.error.message });
     const invite = newId();
-    const rec: InviteRecord = { tags: r.value.tags, encrypt: r.value.encrypt, created_at: now(), ...(r.value.note === undefined || r.value.note === "" ? {} : { note: r.value.note }) };
+    const rec: InviteRecord = { tags: r.value.tags, encrypt: r.value.encrypt, created_at: now() };
     await store.invites.update((cur) => ({ next: { ...cur, [invite]: rec }, result: null }));
     return json(201, inviteView(invite, rec, 0));
   }

@@ -678,10 +678,6 @@ dialog {
     flex: 1 1 12rem;
     min-inline-size: 0;
   }
-  .note {
-    font-weight: 600;
-    overflow-wrap: anywhere;
-  }
   .actions {
     gap: 0.5rem;
   }

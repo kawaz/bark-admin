@@ -99,7 +99,6 @@ export const InviteRecordSchema = v.object({
   // true なら登録トークンを発行するたびに端末ごとの新しい鍵を作る
   encrypt: v.boolean(),
   created_at: v.string(),
-  note: v.optional(v.string()),
 });
 export type InviteRecord = v.InferOutput<typeof InviteRecordSchema>;
 
@@ -151,4 +150,4 @@ export const PatchDeviceSchema = v.pipe(
 );
 export type PatchDevice = v.InferOutput<typeof PatchDeviceSchema>;
 
-export const CreateInviteSchema = v.strictObject({ tags: TagsSchema, encrypt: v.optional(v.boolean(), false), note: v.optional(v.string()) });
+export const CreateInviteSchema = v.strictObject({ tags: TagsSchema, encrypt: v.optional(v.boolean(), false) });

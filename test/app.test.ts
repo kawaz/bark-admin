@@ -467,9 +467,9 @@ describe("devices API", () => {
   });
 });
 
-const InviteSchema = v.object({ invite: v.string(), add_url: v.string(), tags: v.record(v.string(), v.string()), encrypt: v.boolean(), note: v.optional(v.string()), created_at: v.string(), registered: v.number() });
+const InviteSchema = v.object({ invite: v.string(), add_url: v.string(), tags: v.record(v.string(), v.string()), encrypt: v.boolean(), created_at: v.string(), registered: v.number() });
 
-async function createInvite(tags: Record<string, string>, opts: { encrypt?: boolean; note?: string } = {}) {
+async function createInvite(tags: Record<string, string>, opts: { encrypt?: boolean } = {}) {
   const res = await post("/bark-admin/api/invites", { tags, ...opts });
   expect(res.status).toBe(201);
   return v.parse(InviteSchema, await res.json());
@@ -489,8 +489,9 @@ async function openAdd(invite: string, headers: Record<string, string> = {}) {
 
 describe("invites and registration tokens", () => {
   test("an invite is reusable: each add page opening issues a new token (and a new key), two tokens register two devices", async () => {
-    const inv = await createInvite({ owner: "kawaz", family: "kawazu" }, { encrypt: true, note: "for the family" });
-    expect(inv).toMatchObject({ add_url: `https://bark.example/bark-admin/add/${inv.invite}`, encrypt: true, note: "for the family", registered: 0 });
+    const inv = await createInvite({ owner: "kawaz", family: "kawazu" }, { encrypt: true });
+    expect(inv).toMatchObject({ add_url: `https://bark.example/bark-admin/add/${inv.invite}`, encrypt: true, registered: 0 });
+    expect(inv).not.toHaveProperty("note");
     const first = await openAdd(inv.invite);
     const second = await openAdd(inv.invite);
     expect(first.token).not.toBe(second.token);
@@ -678,6 +679,13 @@ describe("invites and registration tokens", () => {
     expect(notFound.status).toBe(404);
     expect(await notFound.text()).toContain('href="/bark-admin/"');
     expect(received).toHaveLength(0);
+  });
+
+  test("a note left in invites.json is read and dropped (not in the API)", async () => {
+    await Bun.write(store.invites.path, JSON.stringify({ OLD: { tags: { owner: "kawaz" }, encrypt: false, created_at: "t0", note: "memo" } }));
+    const list = await (await fetch(`${base}/bark-admin/api/invites`)).text();
+    expect(JSON.parse(list)).toMatchObject({ invite: "OLD", tags: { owner: "kawaz" } });
+    expect(list).not.toContain("note");
   });
 
   test("an invites.json in the one-time invite format is set aside and the store starts empty", async () => {

@@ -258,8 +258,6 @@ function setupInvite() {
     $("#invite-add-url").href = inv.add_url;
     $("#invite-add-url").textContent = inv.add_url;
     $("#invite-crypto-note").hidden = !inv.encrypt;
-    $("#invite-note-shown").textContent = inv.note ?? "";
-    $("#invite-note-shown").hidden = inv.note === undefined;
     $("#invite-tags-shown").replaceChildren(...Object.entries(inv.tags).map(([k, v]) => el("li", { className: "tag", textContent: `${k}=${v}` })));
     home.hidden = true;
     result.hidden = false;
@@ -274,7 +272,6 @@ function setupInvite() {
       el(
         "div",
         { className: "what" },
-        ...(inv.note === undefined ? [] : [el("span", { className: "note", textContent: inv.note })]),
         el("ul", { className: "tags" }, ...(tags.length === 0 ? [el("li", { className: "hint", textContent: "タグなし" })] : tags.map(([k, v]) => el("li", { className: "tag", textContent: `${k}=${v}` })))),
         el("span", { className: "hint", textContent: facts }),
       ),
@@ -303,7 +300,7 @@ function setupInvite() {
   }
 
   async function removeInvite(inv) {
-    const label = inv.note ?? (Object.entries(inv.tags).map(([k, v]) => `${k}=${v}`).join(" ") || "タグなし");
+    const label = Object.entries(inv.tags).map(([k, v]) => `${k}=${v}`).join(" ") || "タグなし";
     if (!confirm(`招待 (${label}) を削除する? QR は使えなくなる。登録済みの端末はそのまま`)) return;
     const res = await fetch(`/bark-admin/api/invites/${encodeURIComponent(inv.invite)}`, { method: "DELETE" });
     if (!res.ok) {
@@ -323,8 +320,7 @@ function setupInvite() {
       error.hidden = false;
       return;
     }
-    const note = $("#invite-note").value.trim();
-    const body = { tags, encrypt: $("#invite-encrypt").checked, ...(note === "" ? {} : { note }) };
+    const body = { tags, encrypt: $("#invite-encrypt").checked };
     const res = await fetch("/bark-admin/api/invites", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     if (!res.ok) {
       error.textContent = `招待を作れなかった: ${await errorMessage(res)}`;
