@@ -1,4 +1,4 @@
-import { el, errorMessage, formatAt, formatTagLines, parseJsonl, parseTagLines } from "./common.js";
+import { el, errorMessage, formatAt, formatTagLines, matchTag, parseJsonl, parseTagLines } from "./common.js";
 
 const GROUP_LABELS = {
   content: "内容",
@@ -43,11 +43,17 @@ function toggleTag(k, v) {
   loadDevices();
 }
 
+// 宛先のパターン (`*値*` / `*`) に当たっているか。押した状態 (aria-pressed) は宛先にこの k=v そのものがある時だけ
+function hits(k, v) {
+  const pattern = state.filter[k];
+  return pattern !== undefined && matchTag(v, pattern);
+}
+
 function tagButton(k, v, { label = `${k}=${v}`, className = "tag" } = {}) {
   const pressed = state.filter[k] === v;
   return el("button", {
     type: "button",
-    className,
+    className: hits(k, v) && !pressed ? `${className} hit` : className,
     textContent: label,
     ariaPressed: String(pressed),
     title: pressed ? `宛先から ${k}=${v} を外す` : `宛先に ${k}=${v} を足す`,
@@ -59,8 +65,8 @@ function deviceItem(d) {
   const { owner, name, ...rest } = d.tags;
   const archived = d.archived_at !== null;
   // 宛先に一致したタグを先に並べ、畳まれて見えなくならないようにする
-  const others = Object.entries(rest).toSorted(([a, av], [b, bv]) => Number(state.filter[b] === bv) - Number(state.filter[a] === av));
-  const nameClass = ["name", name === undefined ? "unnamed" : "", name !== undefined && state.filter["name"] === name ? "hit" : ""].filter(Boolean).join(" ");
+  const others = Object.entries(rest).toSorted(([a, av], [b, bv]) => Number(hits(b, bv)) - Number(hits(a, av)));
+  const nameClass = ["name", name === undefined ? "unnamed" : "", name !== undefined && hits("name", name) ? "hit" : ""].filter(Boolean).join(" ");
   const who = el(
     "a",
     { className: "who", href: `/bark-admin/devices/${encodeURIComponent(d.device_id)}` },

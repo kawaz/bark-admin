@@ -17,7 +17,7 @@
         <label for="filter">宛先</label>
         <textarea id="filter" class="kv" rows="1" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="owner=kawaz" aria-describedby="filter-hint filter-error"></textarea>
         <output id="match-count" class="count" for="filter"></output>
-        <p id="filter-hint" class="hint">1 行に 1 つ <code>key=value</code>。全部に一致する端末へ送る。空なら全台。一覧のタグを押しても足せる</p>
+        <p id="filter-hint" class="hint">1 行に 1 つ <code>key=value</code>。全部に一致する端末へ送る。<code>key=*値*</code> で値を含むもの、<code>key=*</code> でそのタグがあるもの。空なら全台。一覧のタグを押しても足せる</p>
         <p id="filter-error" class="error" role="alert" hidden></p>
         <label class="check"><input type="checkbox" id="show-archived"> 退役済みも表示</label>
       </div>

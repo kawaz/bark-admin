@@ -150,6 +150,15 @@ describe("POST /bark-admin/push", () => {
     expect(pushedKeys()).toEqual([["B"]]);
   });
 
+  test("*v* is a substring match and * checks existence; archived matches are skipped", async () => {
+    const res = await post("/bark-admin/push", { device: { name: "*i*" }, body: "b" });
+    expect(await res.json()).toMatchObject({ sent: [{ device_id: "A" }, { device_id: "B" }], skipped: 0 });
+    await post("/bark-admin/push", { device: { name: "*", owner: "kawaz" }, body: "b" });
+    expect(pushedKeys().at(-1)).toEqual(["A", "B"]);
+    // ip* は * を文字として完全一致するので当たらない
+    expect((await post("/bark-admin/push", { device: { name: "ip*" }, body: "b" })).status).toBe(404);
+  });
+
   test("no device filter = all active devices", async () => {
     await post("/bark-admin/push", { body: "b" });
     expect(pushedKeys()).toEqual([["A", "B", "C"]]);
@@ -250,6 +259,10 @@ describe("devices API", () => {
     expect(await ids("")).toEqual(["A", "B", "C"]);
     expect(await ids("?owner=kawaz")).toEqual(["A", "B"]);
     expect(await ids("?owner=kawaz&archived=1")).toEqual(["A", "B", "D"]);
+    expect(await ids("?name=*phone*")).toEqual(["A"]);
+    expect(await ids("?name=*")).toEqual(["A", "B"]);
+    expect(await ids("?name=*&archived=1")).toEqual(["A", "B", "D"]);
+    expect(await ids("?name=*pad")).toEqual([]);
   });
 
   test("PATCH replaces tags, DELETE archives, PATCH archived_at null restores", async () => {

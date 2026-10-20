@@ -13,6 +13,14 @@ export function parseTagLines(text) {
   return tags;
 }
 
+// device フィルタの値 1 つの解釈 (src/registry.ts の matchTag の写し)。`*v*` は v を含む、`*` はキーがある、それ以外は完全一致
+export function matchTag(value, pattern) {
+  if (value === undefined) return false;
+  if (pattern === "*") return true;
+  if (pattern.length >= 2 && pattern.startsWith("*") && pattern.endsWith("*")) return value.includes(pattern.slice(1, -1));
+  return value === pattern;
+}
+
 export function formatTagLines(tags) {
   return Object.entries(tags)
     .map(([k, v]) => `${k}=${v}`)

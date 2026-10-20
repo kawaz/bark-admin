@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { archiveDevice, finishCryptoConfirm, listItem, matchTags, mergeTags, patchDevice, resolveTargets, selectDevices, startCryptoConfirm, upsertRegistration, view } from "../src/registry.ts";
+import { archiveDevice, finishCryptoConfirm, listItem, matchTag, matchTags, mergeTags, patchDevice, resolveTargets, selectDevices, startCryptoConfirm, upsertRegistration, view } from "../src/registry.ts";
 import type { Devices } from "../src/schema/registry.ts";
 
 const devices: Devices = {
@@ -9,6 +9,42 @@ const devices: Devices = {
   D: { device_token: "td", registered_at: "t0", archived_at: "t1", tags: { owner: "kawaz", name: "old" }, crypto: null },
 };
 
+describe("matchTag", () => {
+  test("plain value is an exact match", () => {
+    expect(matchTag("iphone", "iphone")).toBe(true);
+    expect(matchTag("iphone", "phone")).toBe(false);
+  });
+  test("*v* is a substring match", () => {
+    expect(matchTag("iphone", "*phone*")).toBe(true);
+    expect(matchTag("iphone", "*iphone*")).toBe(true);
+    expect(matchTag("iphone", "*pad*")).toBe(false);
+  });
+  test("* and ** check that the key exists (also for an empty value)", () => {
+    for (const p of ["*", "**"]) {
+      expect(matchTag("x", p)).toBe(true);
+      expect(matchTag("", p)).toBe(true);
+      expect(matchTag(undefined, p)).toBe(false);
+    }
+  });
+  test("v* and *v keep * literal", () => {
+    expect(matchTag("iphone", "iph*")).toBe(false);
+    expect(matchTag("iphone", "*one")).toBe(false);
+    expect(matchTag("iph*", "iph*")).toBe(true);
+    expect(matchTag("*one", "*one")).toBe(true);
+  });
+  test("values containing *", () => {
+    expect(matchTag("a*b", "a*b")).toBe(true);
+    expect(matchTag("a*b", "***")).toBe(true);
+    expect(matchTag("ab", "***")).toBe(false);
+    expect(matchTag("*x*", "*x*")).toBe(true);
+    expect(matchTag("x", "*x*")).toBe(true);
+  });
+  test("a missing key never matches", () => {
+    expect(matchTag(undefined, "*x*")).toBe(false);
+    expect(matchTag(undefined, "x")).toBe(false);
+  });
+});
+
 describe("matchTags", () => {
   test("empty filter matches anything", () => expect(matchTags({ a: "1" }, {})).toBe(true));
   test("all keys must match exactly (AND)", () => {
@@ -17,6 +53,10 @@ describe("matchTags", () => {
   });
   test("missing key does not match", () => expect(matchTags({ owner: "kawaz" }, { name: "iphone" })).toBe(false));
   test("no partial match", () => expect(matchTags({ name: "iphone" }, { name: "iph" })).toBe(false));
+  test("patterns combine with AND", () => {
+    expect(matchTags({ owner: "kawaz", name: "iphone" }, { owner: "*", name: "*phone*" })).toBe(true);
+    expect(matchTags({ name: "iphone" }, { owner: "*", name: "*phone*" })).toBe(false);
+  });
 });
 
 describe("selectDevices", () => {

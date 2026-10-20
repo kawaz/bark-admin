@@ -2,9 +2,18 @@ import type { CryptoKeyOnly, DeviceCrypto, DeviceInfo, DeviceListItem, DeviceRec
 
 // 登録簿の操作 (純粋関数)。永続化は store.ts が受け持つ。
 
-// filter の全キーが完全一致する (AND)。空の filter は全件に当たる。
+// device フィルタの値 1 つの解釈。`*v*` (両端が `*`) は v を含む、`*` (と `**`) はキーがあれば当たる、それ以外は完全一致。
+// `v*` / `*v` の `*` は文字そのもの。否定やエスケープは持たない (public/assets/common.js の matchTag はこの写し)
+export function matchTag(value: string | undefined, pattern: string): boolean {
+  if (value === undefined) return false;
+  if (pattern === "*") return true;
+  if (pattern.length >= 2 && pattern.startsWith("*") && pattern.endsWith("*")) return value.includes(pattern.slice(1, -1));
+  return value === pattern;
+}
+
+// filter の全キーが当たる (AND)。空の filter は全件に当たる。
 export function matchTags(tags: Tags, filter: Tags): boolean {
-  return Object.entries(filter).every(([k, val]) => tags[k] === val);
+  return Object.entries(filter).every(([k, pattern]) => matchTag(tags[k], pattern));
 }
 
 export function view(id: string, { crypto, info, ...rest }: DeviceRecord): DeviceView {
