@@ -47,7 +47,7 @@ Web UI (人) ──────┘
   }
 }
 // invites.json: 招待 = 再利用できるテンプレ。削除するまで何度でも使える
-{ "<invite>": { "tags": { "owner": "kawaz", "name": "ipad" }, "encrypt": true, "created_at": "…", "note": "家族の iPad 用" } }   // note は任意
+{ "<invite>": { "tags": { "owner": "kawaz", "name": "ipad" }, "encrypt": true, "created_at": "…" } }   // 見分けはタグと作成日時
 // registrations.json: 登録トークン = 招待ページを開くたびに発行する使い切りのサーバ URL (/r/<token>)
 {
   "<token>": {
@@ -99,7 +99,7 @@ Bark アプリの「推送加密 / Push Encryption」に合わせ、鍵を持つ
 
 Bark アプリは `bark://addserver?address=<URL>` でサーバを追加し、`<URL>/ping` → `<URL>/register?devicetoken=…&key=` を叩く (Moya が `baseURL.appendingPathComponent(path)` で結合する。path 付き URL でも成立する、ソースで確認済み)。これを使い、**サーバ URL に使い切りの登録トークンを埋める**。QR が指す招待は再利用でき、トークンは招待ページを開くたびに発行する 2 層にする (同じ QR で何台でも追加でき、鍵は端末ごとに別になる):
 
-1. UI の「デバイス追加」でタグ・メモを入力 (「暗号化する」が既定 on) → `POST /bark-admin/api/invites` → `<invite>` 発行。招待は削除 (`DELETE /bark-admin/api/invites/<invite>`) するまで使える
+1. UI の「デバイス追加」でタグを入力 (「暗号化する」が既定 on) → `POST /bark-admin/api/invites` → `<invite>` 発行。招待は削除 (`DELETE /bark-admin/api/invites/<invite>`) するまで使える
 2. QR の中身は `https://bark.<host>/bark-admin/add/<invite>` (Safari で開く案内ページ。iOS カメラが custom scheme の QR を直接開けるかは未検証なので https にする)。開くたびに登録トークンを発行し (招待が暗号化するならトークンに新しい鍵を作る、期限 24 時間)、ページの JS が端末の手がかり (client) を送る。新しいトークンを発行するときに、期限切れで未使用のトークンを捨てる。ページは 3 段のステップを縦に並べ、段の進み具合は `GET /bark-admin/api/registrations/<token>` を 1 段目を押してから全部済むまで 2 秒おき (とページに戻った `visibilitychange` で即) に読んで決める:
    1. 「Bark にサーバーを追加」(`bark://addserver?address=https://bark.<host>/r/<token>` を開く)。ボタンは登録 (`state` が `used`) を見つけるまで押せる。Bark が未導入で App Store から入れて戻った時や、Bark で中断した時にやり直せるようにするため。押した直後の二重タップだけ 1 秒止める (Bark の addServer は address の重複を見ず、2 回目以降はトークンが使用済み (410) で key の無い行が残るので)。`visibilitychange` は状態を読み直す合図にだけ使い、ボタンの可否には使わない。押して 1.5 秒以内に hidden が来なければ Bark が開かなかった (未導入なら iOS はダイアログを出すだけで App Store へ飛ばない) とみなし、ボタンの下に「Bark が開かなかった。入っていなければ App Store から入れてからもう一度」のリンクを出す (App Store のリンクはこの時だけ出す)。`used` になったらボタンを消して ✓ と「追加できた: <name> <device_id>」、`expired` / `invite-deleted` / 404 なら「この招待は使えない。QR を読み直す」
    2. 「受信確認」: 登録を見つけたらページが `POST …/devices/<device_id>/confirm/delivery` を 1 回送る (送ったことを sessionStorage に持ち、送れなかった時も含めて重ねて送らない)。案内「サーバーの登録が完了した。確認の通知を送ったので、届いたらタップする」と「確認通知を再送する」(届かない・消した時用、押すたびに送る)。`device.delivery.confirmed_at` が付いたら ✓ (鍵なしの招待はここで「受信確認が完了した。すべて完了した」)
@@ -138,7 +138,7 @@ bark-admin が中身を見るのは `/register` と `/r/:token/register` の 1 �
 | `POST /bark-admin/api/devices/:id/confirm/:kind` | 確認通知を送る (確認の節)。`kind` は `delivery` (平文) か `crypto` (暗号化、鍵が無ければ 409)、それ以外は 404。`{sent: {device_id, status, message?, encrypted}}`、bark-server が受けなければ 502 |
 | `GET /bark-admin/api/devices/:id/confirm/:kind/:nonce` | 確認通知の `url`。kind の nonce が一致すれば確認済みにして「確認できた」の HTML、不一致は 404 の HTML |
 | `DELETE /bark-admin/api/devices/:id` | `archived_at` を立てる (復帰は PATCH `{archived_at: null}`) |
-| `POST /bark-admin/api/invites` `{tags, encrypt?, note?}` | 201 で招待 `{invite, add_url, tags, encrypt, created_at, note?, registered: 0}`。`encrypt` の既定は false (UI は既定 on で送る) |
+| `POST /bark-admin/api/invites` `{tags, encrypt?}` | 201 で招待 `{invite, add_url, tags, encrypt, created_at, registered: 0}`。`encrypt` の既定は false (UI は既定 on で送る) |
 | `GET /bark-admin/api/invites` | jsonl (1 行 1 招待、POST の応答と同じ形、`registered` はその招待の使用済みトークンの数 = 登録した端末の数) |
 | `GET /bark-admin/api/registrations/:token` | 招待ページが登録の完了を見る。`{token, state, used_by, used_at, expires_at, encrypted, device}`。`state` は `unused` / `used` / `expired` / `invite-deleted` (使用済みなら期限や招待の削除に関わらず `used`)、`device` は使用済みなら `{device_id, tags, info?, delivery: {confirmed_at}, crypto: {confirmed_at} | null}`、それ以外 null。鍵は返さない。不明なトークンは 404 |
 | `POST /bark-admin/api/registrations/:token/client` | 招待ページの JS が送る端末の手がかり `{user_agent, platform, max_touch_points, language, screen: {w, h, dpr}}` をトークンに残す (端末情報と自動タグの節)。204、形が違えば 400、不明なトークンは 404 |
@@ -160,7 +160,7 @@ bark-admin が中身を見るのは `/register` と `/r/:token/register` の 1 �
 
 ## 画面
 
-- `/bark-admin/` TOP: 通知テストフォーム (スキーマから生成、送信先はフィルタに当たる全台) / フィルタ入力 (`k=v` 改行区切り AND、値は `device` と同じ解釈) / デバイス一覧 (device_id, owner, name とその下に `info.os_version`, 暗号化の有無と未確認, 主要 4 tag + 残り n 件, registered_at。device_id で詳細へ) / デバイス追加 (招待の作成: タグ・メモ・「暗号化する」(既定 on) → QR、招待の一覧: タグ・メモ・暗号化・登録数、QR を再表示 / 削除)
+- `/bark-admin/` TOP: 通知テストフォーム (スキーマから生成、送信先はフィルタに当たる全台) / フィルタ入力 (`k=v` 改行区切り AND、値は `device` と同じ解釈) / デバイス一覧 (device_id, owner, name とその下に `info.os_version`, 暗号化の有無と未確認, 主要 4 tag + 残り n 件, registered_at。device_id で詳細へ) / デバイス追加 (招待の作成: タグ・「暗号化する」(既定 on) → QR、招待の一覧: タグ・暗号化・登録数・作成日時、QR を再表示 / 削除)
 - `/bark-admin/devices/:id`: 見出し (name、その直下に device_id を大きめの固定幅で全文、owner) の下を 3 節に分ける。「端末」(登録簿の固有フィールド: device_id / registered_at / 受信確認 (未確認 / 確認済み <日時>) / 暗号化 (無効 / 有効・未確認 / 有効・確認済み <日時>) の定義リスト、その下に受信確認の操作 (「受信確認を送る」) と暗号化の操作 (「暗号化キーを設定」で鍵を作ってコピー、再コピー、「暗号化の確認を送る」、作り直す、無効にする))、「タグ」(今のタグのチップと編集欄)、「端末情報」(`info` の定義リスト、無い項目は出さない、編集できない)。最後に退役ボタン
 - `/bark-admin/add/:invite`: 招待の案内ページ。開くたびにその 1 台用の登録トークンを発行する。3 段のステップ (1. Bark にサーバーを追加 (登録を見つけるまで押せる、Bark が開かなかった時だけ App Store の案内) → 2. 受信確認 (確認通知を再送する) → 3. 暗号化 (鍵付きの招待だけ、伏せ字の鍵をコピーして Bark を開く、暗号化の確認通知を送る))。今の段に状態に合わせた案内を出す。済んだ段に ✓、今の段を強調、先の段は薄く (登録の流れ参照)
 - ビルド無しの静的 HTML + fetch。モダン CSS / JS (Baseline) を使い古いハックで代替しない
