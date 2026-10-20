@@ -89,7 +89,7 @@ Bark アプリの「推送加密 / Push Encryption」に合わせ、鍵を持つ
 | `crypto` | 暗号化 (暗号化の節)。title「bark-admin 暗号化の確認」、body「この通知をタップすると暗号化の確認が完了する」+ 改行 + `device: <device_id>`。鍵が無ければ 409 | 復号できる (nonce は暗号文の中にしか無いので、復号できた端末だけが URL を開ける) | `crypto: {key, confirmed_at, pending_nonce}` |
 
 - `POST …/devices/:id/confirm/<kind>` で nonce を作って kind の `pending_nonce` に保存し、`url` = `<server_url>/bark-admin/api/devices/:id/confirm/<kind>/<nonce>` の確認通知を送る。送り直すと前の nonce は無効
-- タップで `GET …/confirm/<kind>/<nonce>` が開かれると、その kind の nonce が一致した時だけ `confirmed_at` を記録して nonce を消し「確認できた」の HTML を返す (同じ URL は 1 回だけ効く。別の kind の nonce では効かない)。ページには device_id (全文)、tags の name / owner、確認した kind と日時を出す
+- タップで `GET …/confirm/<kind>/<nonce>` が開かれると、その kind の nonce が一致した時だけ `confirmed_at` を記録して nonce を消し「確認できた」の HTML を返す (同じ URL は 1 回だけ効く。別の kind の nonce では効かない)。ページには device_id (全文)、tags の name / owner、確認した kind と日時と、詳細 (`/bark-admin/devices/:id`) への「この端末の設定を開く」を出す。nonce が合わない (使用済み・古い) 時は 404 の HTML で、TOP (`/bark-admin/`) へのリンクを置く
 - Bark のサーバー一覧に同じ address が複数並んでも、各行の key が device_id なので、通知の body・確認できたページ・招待ページの「追加できた」・詳細の見出し直下に出す device_id と見比べれば登録簿上のどの端末かが分かる
 - 鍵を作り直す / 設定し直すと `crypto` は未確認に戻る。`pending_nonce` は API に出さない
 
@@ -102,6 +102,7 @@ Bark アプリは `bark://addserver?address=<URL>` でサーバを追加し、`<
    1. 「Bark にサーバーを追加」(`bark://addserver?address=https://bark.<host>/r/<token>` を開く)。Bark の addServer は address の重複を見ないので、押し直すと同じ address の行が増え、2 回目以降はトークンが使用済み (410) で key の無い行が残る。そのためボタンは押したら disabled にして「Bark で追加中…」にする。押して 1.5 秒以内に `visibilitychange` (hidden) が来なければ Bark が開かなかった (未導入なら iOS はダイアログを出すだけで App Store へ飛ばない) とみなし、ボタンの下に「Bark が開かなかった。入っていなければ App Store から入れてからもう一度」のリンクを出してボタンを押せるように戻す (App Store のリンクはこの時だけ出す)。`state` が `used` になったら ✓ と「追加できた: <name> <device_id>」、`expired` / `invite-deleted` / 404 なら「この招待は使えない。QR を読み直す」
    2. 「受信確認」: 登録を見つけたらページが `POST …/devices/<device_id>/confirm/delivery` を 1 回送る (送ったことを sessionStorage に持ち、送れなかった時も含めて重ねて送らない。送り直しは「もう一度送る」)。「届いた通知をタップする」と「もう一度送る」。`device.delivery.confirmed_at` が付いたら ✓
    3. 「暗号化」(鍵付きの招待だけ): 伏せ字 `••••••••` の鍵と「暗号化キーをコピーして Bark を開く」(押すと `…/crypto-key` で鍵を取り、クリックの同期区間で `ClipboardItem` に写してから `bark://` で Bark を前に出す。写せなかった時だけ鍵を見せて手で入れてもらう)、アプリでの設定手順、「暗号化の確認を送る」(`POST …/confirm/crypto`、注記「キーを設定してから」)。`device.crypto.confirmed_at` が付いたら ✓
+   - 全部の段が済んだら「すべて済んだ」と、登録した端末の詳細への「この端末の設定を開く」を出す。未知の (削除された) 招待の案内ページは 404 の HTML で、TOP へのリンクを置く
 3. アプリが `/r/<token>/ping` `/r/<token>/register` を叩く → bark-admin は prefix を剥がして bark-server の `/ping` `/register` へ透過し、応答の `device_key` / `device_token` で登録簿を upsert、招待のタグとトークンの鍵を付け、トークンに `used_by` / `used_at` を記録する (トークンは 1 回限り)
    - アプリは APNs token を受け取るたび (= 起動のたび) に、追加済みの全サーバへ `register?key=<自分の key>&devicetoken=…` を送り直す (`ServerManager.syncAllServers`)。トークン入り URL も同じ URL で叩かれ続けるので、使用済みのトークンでも `key` が `used_by` と一致する再登録は通す (期限切れ・招待の削除後も)。register 以外 (ping 等) も使用済みのトークンでは透過する
    - 使用済みのトークンへの別の key (別端末・key 空) の register、期限切れで未使用のトークン (register / ping とも) は bark-server に渡さず 410。招待が消えた未使用のトークンも 410
