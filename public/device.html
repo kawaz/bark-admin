@@ -47,13 +47,19 @@
       <p id="crypto-state"></p>
       <div id="crypto-on" class="stack" hidden>
         <div class="key-row"><code id="crypto-key" class="key"></code><button id="crypto-copy" type="button" class="secondary">コピー</button></div>
-        <p class="hint">Bark の「推送加密 / Push Encryption」で Algorithm を AES256、Mode を GCM、Padding を noPadding にし、Key にこの鍵を貼る。鍵を作り直したら Bark 側も貼り直す</p>
+        <p id="crypto-copied" class="hint" role="status"></p>
+        <p class="hint">Bark の「推送加密 / Push Encryption」で Algorithm を AES256、Mode を GCM、Padding を noPadding にし、Key にこの鍵を貼る。貼ったら「確認」を押す。暗号化した確認の通知が届き、タップすると確認済みになる</p>
+        <div class="actions">
+          <button id="crypto-confirm" type="button">確認</button>
+          <button id="crypto-reload" type="button" class="secondary" hidden>状態を読み直す</button>
+          <output id="crypto-status" class="hint"></output>
+        </div>
         <div class="actions">
           <button id="crypto-renew" type="button" class="secondary">鍵を作り直す</button>
           <button id="crypto-disable" type="button" class="secondary">暗号化を無効にする</button>
         </div>
       </div>
-      <button id="crypto-enable" type="button" hidden>暗号化を有効にする</button>
+      <button id="crypto-enable" type="button" hidden>暗号化キーを設定</button>
     </section>
 
     <section id="retire" class="retire stack" aria-labelledby="retire-heading">

@@ -1,4 +1,4 @@
-import { copyText, errorMessage, formatAt, formatTagLines, parseTagLines } from "./common.js";
+import { copyText, errorMessage, formatAt, formatTagLines, parseTagLines, writeClipboard } from "./common.js";
 
 const $ = (sel) => document.querySelector(sel);
 const id = decodeURIComponent(location.pathname.split("/").at(-1));
@@ -28,12 +28,18 @@ function render(d) {
   if (archived) setTime($("#archived-at"), d.archived_at);
   $("#retire").hidden = archived;
   const encrypted = d.crypto !== null;
-  $("#crypto-state").textContent = encrypted
-    ? "有効。通知の中身をこの鍵で暗号化して送る。bark-server と APNs からは読めない"
-    : "無効。通知は暗号化せずに bark-server と APNs を通る";
+  const state = $("#crypto-state");
+  if (!encrypted) state.textContent = "無効。通知は暗号化せずに bark-server と APNs を通る";
+  else if (d.crypto.confirmed_at === null) state.textContent = "有効・未確認。Bark に鍵を貼ったら「確認」で確かめる";
+  else {
+    $("#crypto-status").textContent = "";
+    $("#crypto-reload").hidden = true;
+    state.replaceChildren("有効・確認済み ", Object.assign(document.createElement("time"), { dateTime: d.crypto.confirmed_at, textContent: formatAt(d.crypto.confirmed_at), title: d.crypto.confirmed_at }));
+  }
   $("#crypto-on").hidden = !encrypted;
   $("#crypto-enable").hidden = encrypted;
   $("#crypto-key").textContent = encrypted ? d.crypto.key : "";
+  if (!encrypted) $("#crypto-copied").textContent = "";
 }
 
 async function call(method, body, path = "") {
@@ -75,11 +81,57 @@ $("#archive").addEventListener("click", async () => {
 });
 $("#restore").addEventListener("click", () => call("PATCH", { archived_at: null }));
 
-$("#crypto-copy").addEventListener("click", (ev) => copyText(ev.currentTarget, $("#crypto-key").textContent));
-$("#crypto-enable").addEventListener("click", () => call("POST", undefined, "/crypto"));
-$("#crypto-renew").addEventListener("click", async () => {
-  if (confirm("鍵を作り直す? Bark 側に新しい鍵を貼り直すまで、この端末は通知を読めない")) await call("POST", undefined, "/crypto");
+const COPIED = "コピーした。iPhone の Bark で 暗号化設定 → AES256 / GCM / noPadding / Key に貼る";
+
+// 鍵を作って保存し、そのままクリップボードへ写す (クリックの同期区間で書き込みを始めるため、鍵は Promise のまま渡す)
+async function newKey() {
+  const res = fetch(`${api}/crypto`, { method: "POST" }).then(async (r) => {
+    if (!r.ok) throw new Error(await errorMessage(r));
+    return r.json();
+  });
+  const copied = writeClipboard(res.then((d) => d.crypto.key)).then(
+    () => true,
+    () => false,
+  );
+  let d;
+  try {
+    d = await res;
+  } catch (e) {
+    $("#error").textContent = e.message;
+    $("#error").hidden = false;
+    return;
+  }
+  $("#error").hidden = true;
+  render(d);
+  $("#crypto-status").textContent = "";
+  $("#crypto-reload").hidden = true;
+  $("#crypto-copied").textContent = (await copied) ? COPIED : "コピーできなかった。上の鍵を選んでコピーし、iPhone の Bark で 暗号化設定 → AES256 / GCM / noPadding / Key に貼る";
+}
+
+$("#crypto-copy").addEventListener("click", async (ev) => {
+  await copyText(ev.currentTarget, $("#crypto-key").textContent);
+});
+$("#crypto-enable").addEventListener("click", newKey);
+$("#crypto-renew").addEventListener("click", () => {
+  if (confirm("鍵を作り直す? Bark 側に新しい鍵を貼り直すまで、この端末は通知を読めない")) newKey();
 });
 $("#crypto-disable").addEventListener("click", async () => {
   if (confirm("暗号化を無効にする? 以後の通知は暗号化せずに送る")) await call("PATCH", { crypto: null });
+});
+
+// 暗号化した確認の通知を送る。端末でタップされると server 側で確認済みになるので、戻ってきたら読み直す
+$("#crypto-confirm").addEventListener("click", async () => {
+  const status = $("#crypto-status");
+  status.textContent = "送っている";
+  const res = await fetch(`${api}/crypto/confirm`, { method: "POST" });
+  if (!res.ok) {
+    status.textContent = `送れなかった: ${await errorMessage(res)}`;
+    return;
+  }
+  status.textContent = "確認の通知を送った。iPhone で通知をタップすると確認済みになる";
+  $("#crypto-reload").hidden = false;
+});
+$("#crypto-reload").addEventListener("click", () => call("GET"));
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") call("GET");
 });

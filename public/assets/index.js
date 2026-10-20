@@ -66,7 +66,7 @@ function deviceItem(d) {
     { className: "who", href: `/bark-admin/devices/${encodeURIComponent(d.device_id)}` },
     el("span", { className: nameClass, textContent: name ?? "名前なし" }),
     el("span", { className: "id", textContent: d.device_id }),
-    ...(d.encrypted ? [el("span", { className: "encrypted", textContent: "暗号化" })] : []),
+    ...(d.crypto === null ? [] : [el("span", { className: "encrypted", textContent: d.crypto.confirmed_at === null ? "暗号化 (未確認)" : "暗号化" })]),
     ...(archived ? [el("span", { className: "retired", textContent: `退役 ${formatAt(d.archived_at)}` })] : []),
   );
   const hidden = others.slice(SHOWN_TAGS);

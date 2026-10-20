@@ -49,12 +49,23 @@ export function el(tag, props = {}, ...children) {
   return node;
 }
 
+// text (文字列か、文字列になる Promise) をクリップボードへ写す。
+// Safari はクリック直後の同期区間でしか書かせないので、値を待たずに ClipboardItem へ Promise のまま渡す
+export async function writeClipboard(text) {
+  if (typeof ClipboardItem === "function") {
+    const blob = Promise.resolve(text).then((t) => new Blob([t], { type: "text/plain" }));
+    await navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]);
+  } else {
+    await navigator.clipboard.writeText(await text);
+  }
+}
+
 // text をクリップボードへ写し、押したボタンの文言で結果を返す (少し経つと元の文言に戻す)
 export async function copyText(button, text) {
   const label = button.dataset.label ?? button.textContent;
   button.dataset.label = label;
   try {
-    await navigator.clipboard.writeText(text);
+    await writeClipboard(text);
     button.textContent = "コピーした";
   } catch {
     button.textContent = "コピーできなかった。長押しで選ぶ";
