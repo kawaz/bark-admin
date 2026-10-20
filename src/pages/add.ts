@@ -106,23 +106,66 @@ export function notFoundPageHtml(message: string, heading = "招待が見つか�
   return page("bark-admin: 見つからない", `<h1>${esc(heading)}</h1>\n<p>${esc(message)}</p>\n<a class="button secondary" href="/bark-admin/">bark-admin の TOP を開く</a>`);
 }
 
-// 確認通知をタップして開かれるページ (crypto は復号できた端末だけが URL を知る)。
+function time(iso: string): string {
+  return `<time datetime="${esc(iso)}">${esc(iso.slice(0, 16).replace("T", " "))}</time>`;
+}
+
+// 受信確認・暗号化の状態の 1 行 (詳細ページの public/assets/device.js と同じ言い回し)
+function deliveryState(d: { confirmed_at: string | null } | undefined): string {
+  return d === undefined || d.confirmed_at === null ? "未確認" : `確認済み ${time(d.confirmed_at)}`;
+}
+
+function cryptoState(c: { confirmed_at: string | null } | null): string {
+  if (c === null) return "無効";
+  return c.confirmed_at === null ? "有効・未確認" : `有効・確認済み ${time(c.confirmed_at)}`;
+}
+
+type ConfirmedDevice = {
+  registered_at: string;
+  tags: Record<string, string>;
+  delivery?: { confirmed_at: string | null } | undefined;
+  crypto: { confirmed_at: string | null } | null;
+  info?: { os_version?: string | undefined; ts_hostname?: string | undefined } | undefined;
+};
+
+// 確認通知をタップして開かれるページ (crypto は復号できた端末だけが URL を知る)。詳細ページの要約を 1 画面で見せる。
+// 節は詳細ページと同じ「端末」(登録簿の固有フィールド) / 「タグ」(編集できる k=v) / 「端末情報」(観察値) に分け、今回確認した行を強調する。
 // Bark のサーバーリストに同じ address が並んでも、その key (= device_id) と見比べて登録簿上のどの端末かが分かるよう、device_id を全文で出す
-export function confirmedPageHtml(p: { kind: "delivery" | "crypto"; deviceId: string; tags: Record<string, string>; at: string }): string {
-  const what = p.kind === "delivery" ? { title: "受信を確認できた", line: "この端末に通知が届いている。", label: "受信確認" } : { title: "暗号化を確認できた", line: "この端末は通知を復号できている。", label: "暗号化の確認" };
-  const facts = [
-    ["device_id", `<code>${esc(p.deviceId)}</code>`],
-    ...(p.tags["name"] === undefined ? [] : [["name", esc(p.tags["name"])]]),
-    ...(p.tags["owner"] === undefined ? [] : [["owner", esc(p.tags["owner"])]]),
-    ["確認", `${what.label} <time datetime="${esc(p.at)}">${esc(p.at.slice(0, 16).replace("T", " "))}</time>`],
-  ]
-    .map(([k, val]) => `<dt>${k}</dt><dd>${val}</dd>`)
-    .join("");
+export function confirmedPageHtml(p: { kind: "delivery" | "crypto"; deviceId: string; device: ConfirmedDevice }): string {
+  const d = p.device;
+  const what = p.kind === "delivery" ? { title: "受信を確認できた", line: "この端末に通知が届いている。" } : { title: "暗号化を確認できた", line: "この端末は通知を復号できている。" };
+  const row = (label: string, value: string, changed = false) => `<dt${changed ? ' class="changed"' : ""}>${label}</dt><dd${changed ? ' class="changed"' : ""}>${value}</dd>`;
+  const fields = [
+    row("device_id", `<code>${esc(p.deviceId)}</code>`),
+    row("registered_at", time(d.registered_at)),
+    row("受信確認", deliveryState(d.delivery), p.kind === "delivery"),
+    row("暗号化", cryptoState(d.crypto), p.kind === "crypto"),
+  ].join("");
+  const tags = Object.entries(d.tags);
+  const info = [
+    ...(d.info?.os_version === undefined ? [] : [row("os_version", esc(d.info.os_version))]),
+    ...(d.info?.ts_hostname === undefined ? [] : [row("ts_hostname", esc(d.info.ts_hostname))]),
+  ].join("");
   return page(
     `bark-admin: ${what.title}`,
     `<h1>${what.title}</h1>
-<p>${what.line}Bark のサーバー一覧で、この device_id と同じ key のサーバーがこの端末の登録。このページは閉じてよい。</p>
-<dl class="facts">${facts}</dl>
-<a class="button open" href="/bark-admin/devices/${encodeURIComponent(p.deviceId)}">この端末の設定を開く</a>`,
+<p>${what.line}Bark のサーバー一覧で、この device_id と同じ key のサーバーがこの端末の登録。</p>
+<section class="stack" aria-labelledby="fields-heading">
+<h2 id="fields-heading">端末</h2>
+<dl class="facts">${fields}</dl>
+</section>
+<section class="stack" aria-labelledby="tags-heading">
+<h2 id="tags-heading">タグ</h2>
+${tags.length === 0 ? `<p class="hint">タグなし</p>` : `<ul class="tags">${tags.map(([k, val]) => `<li class="tag">${esc(k)}=${esc(val)}</li>`).join("")}</ul>`}
+</section>
+${
+  info === ""
+    ? ""
+    : `<section class="stack" aria-labelledby="info-heading">
+<h2 id="info-heading">端末情報</h2>
+<dl class="facts">${info}</dl>
+</section>
+`
+}<a class="button open" href="/bark-admin/devices/${encodeURIComponent(p.deviceId)}">この端末の設定を開く</a>`,
   );
 }

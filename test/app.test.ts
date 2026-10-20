@@ -332,7 +332,9 @@ describe("devices API", () => {
     const page = await ok.text();
     expect(page).toContain("暗号化を確認できた");
     expect(page).toContain("<code>A</code>");
-    expect(page).toContain(`暗号化の確認 <time datetime="${NOW}">`);
+    // 今回確認した暗号化の行を強調し、日時はその行に出す
+    expect(page).toContain(`<dt class="changed">暗号化</dt><dd class="changed">有効・確認済み <time datetime="${NOW}">`);
+    expect(page).toContain("<dt>受信確認</dt><dd>未確認</dd>");
     expect((await store.devices.read())["A"]?.crypto).toEqual({ key: KEY_A, confirmed_at: NOW, pending_nonce: null });
     expect(await (await fetch(`${base}/bark-admin/api/devices/A`)).json()).toMatchObject({ crypto: { key: KEY_A, confirmed_at: NOW } });
 
@@ -366,9 +368,14 @@ describe("devices API", () => {
     const page = await ok.text();
     expect(page).toContain("受信を確認できた");
     expect(page).toContain("<code>A</code>");
-    expect(page).toContain("<dd>iphone</dd>");
-    expect(page).toContain("<dd>kawaz</dd>");
-    expect(page).toContain(`受信確認 <time datetime="${NOW}">`);
+    // 節は 端末 (固有フィールド) / タグ (チップ) / 端末情報 (あれば)。今回確認した受信確認の行を強調する
+    expect(page).toContain('<h2 id="fields-heading">端末</h2>');
+    expect(page).toContain('<h2 id="tags-heading">タグ</h2>');
+    expect(page).not.toContain("端末情報");
+    expect(page).toContain('<li class="tag">owner=kawaz</li><li class="tag">name=iphone</li>');
+    expect(page).toContain(`<dt>registered_at</dt><dd><time datetime="t0">`);
+    expect(page).toContain(`<dt class="changed">受信確認</dt><dd class="changed">確認済み <time datetime="${NOW}">`);
+    expect(page).toContain("<dt>暗号化</dt><dd>有効・未確認</dd>");
     expect(page).toContain('<a class="button open" href="/bark-admin/devices/A">この端末の設定を開く</a>');
     // 使用済みの確認リンクは 404 の HTML で、TOP へのリンクを置く
     const used = await fetch(`${base}/bark-admin/api/devices/A/confirm/delivery/${nonce}`);
@@ -379,6 +386,29 @@ describe("devices API", () => {
     const [line] = (await (await fetch(`${base}/bark-admin/api/devices?name=iphone`)).text()).split("\n");
     expect(JSON.parse(line ?? "")).toMatchObject({ delivery: { confirmed_at: NOW } });
     expect(line).not.toContain("pending_nonce");
+  });
+
+  test("the confirmed page shows the crypto row in 3 states and the device info section when there is info", async () => {
+    const confirmPage = async (id: string) => {
+      await fetch(`${base}/bark-admin/api/devices/${id}/confirm/delivery`, { method: "POST" });
+      const nonce = (await store.devices.read())[id]?.delivery?.pending_nonce ?? "";
+      return (await fetch(`${base}/bark-admin/api/devices/${id}/confirm/delivery/${nonce}`)).text();
+    };
+    // 無効
+    expect(await confirmPage("B")).toContain("<dt>暗号化</dt><dd>無効</dd>");
+    // 有効・未確認
+    await setCrypto("B", KEY_B);
+    expect(await confirmPage("B")).toContain("<dt>暗号化</dt><dd>有効・未確認</dd>");
+    // 有効・確認済み (日時つき)
+    await fetch(`${base}/bark-admin/api/devices/B/confirm/crypto`, { method: "POST" });
+    const cn = (await store.devices.read())["B"]?.crypto?.pending_nonce ?? "";
+    await fetch(`${base}/bark-admin/api/devices/B/confirm/crypto/${cn}`);
+    expect(await confirmPage("B")).toContain(`<dt>暗号化</dt><dd>有効・確認済み <time datetime="${NOW}">`);
+    // 端末情報 (os_version / ts_hostname) があれば節を出す
+    await fetch(`${base}/register?devicetoken=tb2&key=B`, { headers: { "user-agent": "Bark/1.6.4 (me.fin.bark; build:8; iOS 26.7.1) Alamofire/5.10.2" } });
+    const withInfo = await confirmPage("B");
+    expect(withInfo).toContain('<h2 id="info-heading">端末情報</h2>');
+    expect(withInfo).toContain("<dt>os_version</dt><dd>iOS 26.7.1</dd>");
   });
 
   test("delivery and crypto confirms are independent: one kind's nonce does not confirm the other", async () => {

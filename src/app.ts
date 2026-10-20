@@ -286,7 +286,7 @@ export function createApp(deps: AppDeps) {
       return next === null ? { result: null } : { next: { ...cur, [id]: next }, result: next };
     });
     if (confirmed === null) return html(404, notFoundPageHtml("この確認リンクは使用済みか古い。確認を送り直す。", "確認リンクが見つからない"));
-    return html(200, confirmedPageHtml({ kind, deviceId: id, tags: confirmed.tags, at }));
+    return html(200, confirmedPageHtml({ kind, deviceId: id, device: confirmed }));
   }
 
   // URL の kind (delivery / crypto)。それ以外は 404

@@ -1,8 +1,12 @@
-import { copyText, errorMessage, formatAt, formatTagLines, parseTagLines, writeClipboard } from "./common.js";
+import { copyText, el, errorMessage, formatAt, formatTagLines, parseTagLines, writeClipboard } from "./common.js";
 
 const $ = (sel) => document.querySelector(sel);
 const id = decodeURIComponent(location.pathname.split("/").at(-1));
 const api = `/bark-admin/api/devices/${encodeURIComponent(id)}`;
+
+function timeEl(iso) {
+  return el("time", { dateTime: iso, textContent: formatAt(iso), title: iso });
+}
 
 function setTime(node, iso) {
   node.dateTime = iso;
@@ -39,11 +43,14 @@ function render(d) {
   $("#device-owner").textContent = owner === undefined ? "owner なし" : `owner ${owner}`;
   document.title = `bark-admin: ${name ?? id}`;
   $("#device-id").textContent = d.device_id;
+  $("#device-id-fact").textContent = d.device_id;
   setTime($("#registered-at"), d.registered_at);
   // APNs が無効と返した端末は bark-server が token を空にする。アプリを起動すると登録し直される
   if (d.device_token === "") $("#device-token").textContent = "なし。Bark アプリを起動すると登録し直される";
   else $("#device-token").replaceChildren(Object.assign(document.createElement("code"), { textContent: d.device_token }));
   $("#tags").value = formatTagLines(d.tags);
+  const tags = Object.entries(d.tags);
+  $("#tag-chips").replaceChildren(...(tags.length === 0 ? [el("li", { className: "hint", textContent: "タグなし" })] : tags.map(([k, v]) => el("li", { className: "tag", textContent: `${k}=${v}` }))));
   renderInfo(d.info);
   const archived = d.archived_at !== null;
   $("#archived-banner").hidden = !archived;
@@ -53,16 +60,20 @@ function render(d) {
   if (delivered === null) $("#delivery-state").textContent = "未確認";
   else {
     $("#delivery-status").textContent = "";
-    $("#delivery-state").replaceChildren("確認済み ", Object.assign(document.createElement("time"), { dateTime: delivered, textContent: formatAt(delivered), title: delivered }));
+    $("#delivery-state").replaceChildren("確認済み ", timeEl(delivered));
   }
   const encrypted = d.crypto !== null;
+  const summary = $("#crypto-summary");
+  if (!encrypted) summary.textContent = "無効";
+  else if (d.crypto.confirmed_at === null) summary.textContent = "有効・未確認";
+  else summary.replaceChildren("有効・確認済み ", timeEl(d.crypto.confirmed_at));
   const state = $("#crypto-state");
   if (!encrypted) state.textContent = "無効。通知は暗号化せずに bark-server と APNs を通る";
   else if (d.crypto.confirmed_at === null) state.textContent = "有効・未確認。Bark に鍵を貼ったら「暗号化の確認を送る」で確かめる";
   else {
     $("#crypto-status").textContent = "";
     $("#crypto-reload").hidden = true;
-    state.replaceChildren("有効・確認済み ", Object.assign(document.createElement("time"), { dateTime: d.crypto.confirmed_at, textContent: formatAt(d.crypto.confirmed_at), title: d.crypto.confirmed_at }));
+    state.textContent = "有効・確認済み。通知は暗号化して送る";
   }
   $("#crypto-on").hidden = !encrypted;
   $("#crypto-enable").hidden = encrypted;
