@@ -42,15 +42,25 @@
       </div>
     </form>
 
+    <section class="delivery stack" aria-labelledby="delivery-heading">
+      <h2 id="delivery-heading">受信確認</h2>
+      <p id="delivery-state"></p>
+      <p class="hint">平文の確認の通知を送る。端末でタップすると確認済みになる</p>
+      <div class="actions">
+        <button id="delivery-confirm" type="button">受信確認を送る</button>
+        <output id="delivery-status" class="hint"></output>
+      </div>
+    </section>
+
     <section class="crypto stack" aria-labelledby="crypto-heading">
       <h2 id="crypto-heading">暗号化</h2>
       <p id="crypto-state"></p>
       <div id="crypto-on" class="stack" hidden>
         <div class="key-row"><code id="crypto-key" class="key"></code><button id="crypto-copy" type="button" class="secondary">コピー</button></div>
         <p id="crypto-copied" class="hint" role="status"></p>
-        <p class="hint">Bark の「推送加密 / Push Encryption」で Algorithm を AES256、Mode を GCM、Padding を noPadding にし、Key にこの鍵を貼る。貼ったら「確認」を押す。暗号化した確認の通知が届き、タップすると確認済みになる</p>
+        <p class="hint">Bark の「推送加密 / Push Encryption」で Algorithm を AES256、Mode を GCM、Padding を noPadding にし、Key にこの鍵を貼る。貼ったら「暗号化の確認を送る」を押す。暗号化した確認の通知が届き、タップすると確認済みになる</p>
         <div class="actions">
-          <button id="crypto-confirm" type="button">確認</button>
+          <button id="crypto-confirm" type="button">暗号化の確認を送る</button>
           <button id="crypto-reload" type="button" class="secondary" hidden>状態を読み直す</button>
           <output id="crypto-status" class="hint"></output>
         </div>

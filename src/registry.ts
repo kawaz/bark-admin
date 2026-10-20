@@ -1,4 +1,4 @@
-import type { CryptoKeyOnly, DeviceCrypto, DeviceInfo, DeviceListItem, DeviceRecord, Devices, DeviceView, PatchDevice, Tags } from "./schema/registry.ts";
+import type { ConfirmKind, CryptoKeyOnly, DeviceCrypto, DeviceInfo, DeviceListItem, DeviceRecord, Devices, DeviceView, PatchDevice, Tags } from "./schema/registry.ts";
 
 // 登録簿の操作 (純粋関数)。永続化は store.ts が受け持つ。
 
@@ -16,8 +16,14 @@ export function matchTags(tags: Tags, filter: Tags): boolean {
   return Object.entries(filter).every(([k, pattern]) => matchTag(tags[k], pattern));
 }
 
-export function view(id: string, { crypto, info, ...rest }: DeviceRecord): DeviceView {
-  return { device_id: id, ...rest, crypto: crypto === null ? null : { key: crypto.key, confirmed_at: crypto.confirmed_at }, info: info ?? {} };
+export function view(id: string, { crypto, info, delivery, ...rest }: DeviceRecord): DeviceView {
+  return {
+    device_id: id,
+    ...rest,
+    crypto: crypto === null ? null : { key: crypto.key, confirmed_at: crypto.confirmed_at },
+    info: info ?? {},
+    delivery: { confirmed_at: delivery?.confirmed_at ?? null },
+  };
 }
 
 export function selectDevices(devices: Devices, filter: Tags, includeArchived: boolean): DeviceView[] {
@@ -95,13 +101,18 @@ export function archiveDevice(rec: DeviceRecord, now: string): DeviceRecord {
   return rec.archived_at === null ? { ...rec, archived_at: now } : rec;
 }
 
-// 確認通知に埋める nonce を記録する。鍵が無ければ null
-export function startCryptoConfirm(rec: DeviceRecord, nonce: string): DeviceRecord | null {
+// 確認通知に埋める nonce を kind の側に記録する (送り直すと前の nonce は無効)。crypto は鍵が無ければ null
+export function startConfirm(rec: DeviceRecord, kind: ConfirmKind, nonce: string): DeviceRecord | null {
+  if (kind === "delivery") return { ...rec, delivery: { confirmed_at: rec.delivery?.confirmed_at ?? null, pending_nonce: nonce } };
   return rec.crypto === null ? null : { ...rec, crypto: { ...rec.crypto, pending_nonce: nonce } };
 }
 
-// 確認通知の URL が開かれた。nonce が一致したときだけ確認済みにして nonce を消す (同じ URL は 1 回だけ効く)
-export function finishCryptoConfirm(rec: DeviceRecord, nonce: string, now: string): DeviceRecord | null {
+// 確認通知の URL が開かれた。kind の nonce が一致したときだけ確認済みにして nonce を消す (同じ URL は 1 回だけ効く、別の kind の nonce では効かない)
+export function finishConfirm(rec: DeviceRecord, kind: ConfirmKind, nonce: string, now: string): DeviceRecord | null {
+  if (kind === "delivery") {
+    if (rec.delivery === undefined || rec.delivery.pending_nonce === null || rec.delivery.pending_nonce !== nonce) return null;
+    return { ...rec, delivery: { confirmed_at: now, pending_nonce: null } };
+  }
   if (rec.crypto === null || rec.crypto.pending_nonce === null || rec.crypto.pending_nonce !== nonce) return null;
   return { ...rec, crypto: { ...rec.crypto, confirmed_at: now, pending_nonce: null } };
 }

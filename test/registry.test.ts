@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { archiveDevice, finishCryptoConfirm, listItem, matchTag, matchTags, mergeTags, patchDevice, resolveTargets, selectDevices, startCryptoConfirm, upsertRegistration, view } from "../src/registry.ts";
+import { archiveDevice, finishConfirm, listItem, matchTag, matchTags, mergeTags, patchDevice, resolveTargets, selectDevices, startConfirm, upsertRegistration, view } from "../src/registry.ts";
 import type { Devices } from "../src/schema/registry.ts";
 
 const devices: Devices = {
@@ -69,7 +69,7 @@ describe("selectDevices", () => {
   });
   test("view carries device_id", () => {
     expect(selectDevices(devices, { name: "iphone" }, false)).toEqual([
-      { device_id: "A", device_token: "ta", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone", family: "kawazu" }, crypto: null, info: {} },
+      { device_id: "A", device_token: "ta", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone", family: "kawazu" }, crypto: null, info: {}, delivery: { confirmed_at: null } },
     ]);
   });
 });
@@ -131,16 +131,29 @@ describe("patch / archive", () => {
   });
 });
 
-describe("crypto confirm", () => {
+describe("confirm (delivery / crypto)", () => {
   const withKey = { device_token: "ta", registered_at: "t0", archived_at: null, tags: {}, crypto: { key: "K".repeat(32), confirmed_at: null, pending_nonce: null } };
-  test("start records the nonce, finish with the same nonce confirms and clears it", () => {
-    const started = startCryptoConfirm(withKey, "N1");
+  test("crypto: start records the nonce, finish with the same nonce confirms and clears it", () => {
+    const started = startConfirm(withKey, "crypto", "N1");
     expect(started?.crypto?.pending_nonce).toBe("N1");
-    expect(started && finishCryptoConfirm(started, "N2", "t1")).toBeNull();
-    expect(started && finishCryptoConfirm(started, "N1", "t1")?.crypto).toEqual({ key: "K".repeat(32), confirmed_at: "t1", pending_nonce: null });
+    expect(started && finishConfirm(started, "crypto", "N2", "t1")).toBeNull();
+    expect(started && finishConfirm(started, "crypto", "N1", "t1")?.crypto).toEqual({ key: "K".repeat(32), confirmed_at: "t1", pending_nonce: null });
   });
-  test("no key: cannot start; no pending nonce: cannot finish", () => {
-    expect(startCryptoConfirm({ ...withKey, crypto: null }, "N1")).toBeNull();
-    expect(finishCryptoConfirm(withKey, "N1", "t1")).toBeNull();
+  test("crypto: no key cannot start; no pending nonce cannot finish", () => {
+    expect(startConfirm({ ...withKey, crypto: null }, "crypto", "N1")).toBeNull();
+    expect(finishConfirm(withKey, "crypto", "N1", "t1")).toBeNull();
+  });
+  test("delivery works without a key and is independent of crypto", () => {
+    const plain = { ...withKey, crypto: null };
+    const d = startConfirm(plain, "delivery", "D1");
+    expect(d?.delivery).toEqual({ confirmed_at: null, pending_nonce: "D1" });
+    expect(d && finishConfirm(d, "crypto", "D1", "t1")).toBeNull();
+    expect(d && finishConfirm(d, "delivery", "D1", "t1")?.delivery).toEqual({ confirmed_at: "t1", pending_nonce: null });
+    // 両方送った状態で、片方の nonce はもう片方を確認済みにしない
+    const both = startConfirm(startConfirm(withKey, "delivery", "D2") ?? withKey, "crypto", "C2");
+    expect(both && finishConfirm(both, "delivery", "C2", "t1")).toBeNull();
+    const crypto = both && finishConfirm(both, "crypto", "C2", "t1");
+    expect(crypto?.crypto?.confirmed_at).toBe("t1");
+    expect(crypto?.delivery).toEqual({ confirmed_at: null, pending_nonce: "D2" });
   });
 });

@@ -49,6 +49,17 @@ export const DeviceInfoSchema = v.object({
 });
 export type DeviceInfo = v.InferOutput<typeof DeviceInfoSchema>;
 
+// 受信の確認: 平文の確認通知の URL (pending_nonce 入り) を端末が開いた日時。暗号化の確認 (DeviceCrypto の confirmed_at) と同じ仕組みで、鍵に依らない
+export const DeliveryConfirmSchema = v.object({
+  confirmed_at: v.nullable(v.string()),
+  pending_nonce: v.nullable(v.string()),
+});
+export type DeliveryConfirm = v.InferOutput<typeof DeliveryConfirmSchema>;
+
+// 確認の種類。delivery は平文の通知が届くか、crypto は暗号化した通知を復号できるか
+export const ConfirmKindSchema = v.picklist(["delivery", "crypto"]);
+export type ConfirmKind = v.InferOutput<typeof ConfirmKindSchema>;
+
 export const DeviceRecordSchema = v.object({
   device_token: v.string(),
   registered_at: v.string(),
@@ -58,6 +69,8 @@ export const DeviceRecordSchema = v.object({
   crypto: v.optional(v.nullable(DeviceCryptoSchema), null),
   // 次の登録で埋まる。それまでの行 (と手で書いた行) には無い
   info: v.optional(DeviceInfoSchema),
+  // 受信の確認を一度も送っていない行には無い (未確認として扱う)
+  delivery: v.optional(DeliveryConfirmSchema),
 });
 export type DeviceRecord = v.InferOutput<typeof DeviceRecordSchema>;
 
@@ -97,12 +110,17 @@ export type Registrations = v.InferOutput<typeof RegistrationsSchema>;
 export const LegacyInvitesSchema = v.record(v.string(), v.looseObject({ used_by: v.nullable(v.string()) }));
 
 // API で外に出す 1 device の形 (キーだった device_id を中に持つ)。pending_nonce は確認の根拠なので外に出さない
-// info の無い行も {} で出す
-export type DeviceView = { device_id: string } & Omit<DeviceRecord, "crypto" | "info"> & { crypto: { key: string; confirmed_at: string | null } | null; info: DeviceInfo };
+// info の無い行も {} で出す。delivery は確認状態だけ (無い行は未確認)
+export type DeviceView = { device_id: string } & Omit<DeviceRecord, "crypto" | "info" | "delivery"> & {
+  crypto: { key: string; confirmed_at: string | null } | null;
+  info: DeviceInfo;
+  delivery: { confirmed_at: string | null };
+};
 
 // 一覧 (GET /api/devices) の 1 行。鍵は詳細でだけ見せ、一覧には暗号化の有無と確認状態だけ出す。info は一覧の表示に使う 2 項目だけ
-export type DeviceListItem = { device_id: string } & Omit<DeviceRecord, "crypto" | "info"> & {
+export type DeviceListItem = { device_id: string } & Omit<DeviceRecord, "crypto" | "info" | "delivery"> & {
   crypto: { confirmed_at: string | null } | null;
+  delivery: { confirmed_at: string | null };
   info: Pick<DeviceInfo, "ts_hostname" | "os_version">;
 };
 

@@ -1,6 +1,6 @@
-// /bark-admin/add/:invite の案内ページと、暗号化の確認通知から開かれるページ。QR から iPhone の Safari で開かれ、Bark アプリにサーバ (登録トークン入り URL) を追加させる。
-// 最初に目に入るのは「Bark にサーバーを追加」、App Store は末尾に小さく (見た目の判断は docs/design/ui.md)。
-// 動きは public/assets/add.js: ボタンは 1 回だけ押せ、登録できたかを GET /bark-admin/api/registrations/:token で見て、できたら暗号化キーの節を出す。
+// /bark-admin/add/:invite の案内ページと、確認通知から開かれるページ。QR から iPhone の Safari で開かれ、Bark アプリにサーバ (登録トークン入り URL) を追加させる。
+// 案内ページは 3 段のステップ (1. サーバーを追加 → 2. 受信確認 → 3. 暗号化 (鍵付きの招待だけ)) を縦に並べる (見た目の判断は docs/design/ui.md)。
+// 動きは public/assets/add.js: 段の進み具合は GET /bark-admin/api/registrations/:token で読む。
 
 export const APP_STORE_URL = "https://apps.apple.com/app/bark-custom-notifications/id1403753865";
 
@@ -27,11 +27,50 @@ ${main}
 `;
 }
 
-// 登録できた後にだけ出す。鍵はページに埋めず、ボタンを押した時に取ってクリップボードへ写す (写せなかった時だけ見せる)
-function cryptoSection(): string {
-  return `<section id="crypto" class="crypto stack" aria-labelledby="crypto-heading" hidden>
-<h2 id="crypto-heading">暗号化キー</h2>
-<p>この端末への通知は暗号化して送る。Bark に鍵を設定すると読める。</p>
+// 段の見出しと、済んだ時に出す 1 行 (data-done に add.js が書く)。段の中身は今の段の時だけ見える
+// 最初は 1 段目が今の段、残りは先の段
+function step(id: string, n: number, title: string, body: string): string {
+  return `<li id="step-${id}" class="step ${n === 1 ? "current" : "later"}">
+<h2><span class="mark" aria-hidden="true">${n}</span>${esc(title)}</h2>
+<p class="done-line" hidden></p>
+<div class="body stack"${n === 1 ? "" : " hidden"}>
+${body}
+</div>
+</li>`;
+}
+
+// 1. サーバーを追加。ボタンは 1 回だけ押せる。Bark が開かなかった時だけ App Store への案内を出す
+function addStep(addserverUrl: string, tags: string): string {
+  return step(
+    "add",
+    1,
+    "Bark にサーバーを追加",
+    `<button type="button" id="add-server" class="open" data-href="${esc(addserverUrl)}">Bark にサーバーを追加</button>
+<p id="add-status" class="hint" role="status"></p>
+<p id="no-bark" class="hint" hidden>Bark が開かなかった。入っていなければ <a href="${esc(APP_STORE_URL)}">App Store から入れて</a>からもう一度</p>
+<p>Bark に切り替わったら、サーバーの追加を確定する。この端末が${tags === "" ? "タグなしで" : "次のタグで"}登録される。ボタンはこのページを開いた 1 台だけ、24 時間まで使える。</p>
+${tags === "" ? "" : `<ul class="tags">${tags}</ul>`}`,
+  );
+}
+
+// 2. 受信確認。登録できたら add.js が平文の確認通知を 1 回送る
+function deliveryStep(): string {
+  return step(
+    "delivery",
+    2,
+    "受信確認",
+    `<p>確認の通知が届いたらタップする。</p>
+<div class="actions"><button type="button" id="delivery-again" class="secondary">もう一度送る</button><output id="delivery-status" class="hint"></output></div>`,
+  );
+}
+
+// 3. 暗号化。鍵はページに埋めず、ボタンを押した時に取ってクリップボードへ写す (写せなかった時だけ見せる)
+function cryptoStep(): string {
+  return step(
+    "crypto",
+    3,
+    "暗号化",
+    `<p>この端末への通知は暗号化して送る。Bark に鍵を設定すると読める。</p>
 <div class="key-row"><code id="crypto-key" class="key masked" aria-label="暗号化キー (隠している)">••••••••</code></div>
 <button type="button" id="crypto-copy">暗号化キーをコピーして Bark を開く</button>
 <p id="crypto-status" class="hint" role="status"></p>
@@ -40,7 +79,9 @@ function cryptoSection(): string {
 <li>Algorithm を AES256、Mode を GCM、Padding を noPadding にする</li>
 <li>Key に鍵を貼って保存する</li>
 </ol>
-</section>`;
+<div class="actions"><button type="button" id="crypto-confirm" class="secondary">暗号化の確認を送る</button><output id="crypto-confirm-status" class="hint"></output></div>
+<p class="hint">キーを設定してから送る。届いた通知をタップすると確認できる</p>`,
+  );
 }
 
 export function addPageHtml(p: { addserverUrl: string; token: string; tags: Record<string, string>; encrypted: boolean }): string {
@@ -50,15 +91,11 @@ export function addPageHtml(p: { addserverUrl: string; token: string; tags: Reco
   return page(
     "bark-admin: Bark にサーバーを追加",
     `<h1>Bark にこのサーバーを追加</h1>
-<div id="add" class="add stack" data-token="${esc(p.token)}" data-href="${esc(p.addserverUrl)}">
-<button type="button" id="add-server" class="open">Bark にサーバーを追加</button>
-<p id="add-status" class="status" role="status"></p>
-</div>
-<div class="then">
-<p id="add-guide">Bark に切り替わったら、サーバーの追加を確定する。この端末が${tags === "" ? "タグなしで" : "次のタグで"}登録される。ボタンはこのページを開いた 1 台だけ、24 時間まで使える。</p>
-${tags === "" ? "" : `<ul class="tags">${tags}</ul>`}
-</div>
-${p.encrypted ? `${cryptoSection()}\n` : ""}<p class="install hint">Bark が入っていなければ <a href="${esc(APP_STORE_URL)}">App Store で入れる</a></p>`,
+<ol id="flow" class="flow" data-token="${esc(p.token)}">
+${addStep(p.addserverUrl, tags)}
+${deliveryStep()}
+${p.encrypted ? `${cryptoStep()}\n` : ""}</ol>
+<p id="flow-status" class="hint" role="status"></p>`,
     "add.js",
   );
 }
@@ -67,7 +104,9 @@ export function notFoundPageHtml(message: string, heading = "招待が見つか�
   return page("bark-admin: 見つからない", `<h1>${esc(heading)}</h1>\n<p>${esc(message)}</p>`);
 }
 
-// 暗号化の確認通知をタップして開かれるページ (復号できた端末だけが URL を知る)
-export function confirmedPageHtml(): string {
-  return page("bark-admin: 暗号化を確認できた", `<h1>暗号化を確認できた</h1>\n<p>この端末は通知を復号できている。このページは閉じてよい。</p>`);
+// 確認通知をタップして開かれるページ (crypto は復号できた端末だけが URL を知る)
+export function confirmedPageHtml(kind: "delivery" | "crypto"): string {
+  return kind === "delivery"
+    ? page("bark-admin: 受信を確認できた", `<h1>受信を確認できた</h1>\n<p>この端末に通知が届いている。このページは閉じてよい。</p>`)
+    : page("bark-admin: 暗号化を確認できた", `<h1>暗号化を確認できた</h1>\n<p>この端末は通知を復号できている。このページは閉じてよい。</p>`);
 }

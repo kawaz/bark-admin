@@ -852,17 +852,63 @@ main.invite {
     display: grid;
     gap: 0.75rem;
   }
-  /* 押した後の経過 (追加中 / 追加できた / 使えない)。追加できた時は本文の大きさで太く */
-  .add .status:empty {
+  .hint:empty {
     display: none;
   }
-  .add .status.done {
+}
+
+/* 招待ページの 3 段。済んだ段は ✓ と結果の 1 行、今の段は番号を塗って中身を見せ、先の段は見出しだけ薄く */
+.flow {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  display: grid;
+  gap: 0.75rem;
+  padding-block: 1.1rem;
+  border-block-start: 1px solid var(--line);
+  h2 {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
     font-size: var(--step-1);
-    font-weight: 700;
   }
-  /* Bark 未導入向けの App Store は末尾に小さく */
-  .install {
-    padding-block-start: 1.25rem;
-    border-block-start: 1px solid var(--line);
+  .mark {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    inline-size: 1.75rem;
+    block-size: 1.75rem;
+    font-size: var(--step--1);
+    font-weight: 700;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+  }
+  .done-line {
+    padding-inline-start: 2.35rem;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  &.current .mark {
+    color: var(--paper);
+    background: var(--ink);
+    border-color: var(--ink);
+  }
+  &.done .mark {
+    font-size: 0;
+    border-color: var(--ink);
+    &::before {
+      content: "✓";
+      font-size: var(--step--1);
+    }
+  }
+  &.later {
+    color: var(--muted);
+    h2 {
+      font-weight: 400;
+    }
   }
 }

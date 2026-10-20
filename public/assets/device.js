@@ -49,10 +49,16 @@ function render(d) {
   $("#archived-banner").hidden = !archived;
   if (archived) setTime($("#archived-at"), d.archived_at);
   $("#retire").hidden = archived;
+  const delivered = d.delivery.confirmed_at;
+  if (delivered === null) $("#delivery-state").textContent = "未確認";
+  else {
+    $("#delivery-status").textContent = "";
+    $("#delivery-state").replaceChildren("確認済み ", Object.assign(document.createElement("time"), { dateTime: delivered, textContent: formatAt(delivered), title: delivered }));
+  }
   const encrypted = d.crypto !== null;
   const state = $("#crypto-state");
   if (!encrypted) state.textContent = "無効。通知は暗号化せずに bark-server と APNs を通る";
-  else if (d.crypto.confirmed_at === null) state.textContent = "有効・未確認。Bark に鍵を貼ったら「確認」で確かめる";
+  else if (d.crypto.confirmed_at === null) state.textContent = "有効・未確認。Bark に鍵を貼ったら「暗号化の確認を送る」で確かめる";
   else {
     $("#crypto-status").textContent = "";
     $("#crypto-reload").hidden = true;
@@ -141,17 +147,20 @@ $("#crypto-disable").addEventListener("click", async () => {
   if (confirm("暗号化を無効にする? 以後の通知は暗号化せずに送る")) await call("PATCH", { crypto: null });
 });
 
-// 暗号化した確認の通知を送る。端末でタップされると server 側で確認済みになるので、戻ってきたら読み直す
-$("#crypto-confirm").addEventListener("click", async () => {
-  const status = $("#crypto-status");
+// 確認の通知を送る (delivery は平文、crypto は暗号化)。端末でタップされると server 側で確認済みになるので、戻ってきたら読み直す
+async function sendConfirm(kind, status, sentText) {
   status.textContent = "送っている";
-  const res = await fetch(`${api}/crypto/confirm`, { method: "POST" });
+  const res = await fetch(`${api}/confirm/${kind}`, { method: "POST" });
   if (!res.ok) {
     status.textContent = `送れなかった: ${await errorMessage(res)}`;
-    return;
+    return false;
   }
-  status.textContent = "確認の通知を送った。iPhone で通知をタップすると確認済みになる";
-  $("#crypto-reload").hidden = false;
+  status.textContent = sentText;
+  return true;
+}
+$("#delivery-confirm").addEventListener("click", () => sendConfirm("delivery", $("#delivery-status"), "受信確認の通知を送った。iPhone で通知をタップすると確認済みになる"));
+$("#crypto-confirm").addEventListener("click", async () => {
+  if (await sendConfirm("crypto", $("#crypto-status"), "暗号化の確認の通知を送った。iPhone で通知をタップすると確認済みになる")) $("#crypto-reload").hidden = false;
 });
 $("#crypto-reload").addEventListener("click", () => call("GET"));
 document.addEventListener("visibilitychange", () => {

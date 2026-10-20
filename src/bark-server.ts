@@ -85,8 +85,17 @@ export class BarkServer {
   }
 
   // 暗号化した 1 台分を device_key で送る。平文のパラメータは ciphertext の中にだけある
-  async pushEncrypted(deviceKey: string, sealed: { ciphertext: string; iv: string }): Promise<PushResult> {
-    const up = await this.forward("POST", "/push", "application/json; charset=utf-8", JSON.stringify({ device_key: deviceKey, ...sealed }));
+  pushEncrypted(deviceKey: string, sealed: { ciphertext: string; iv: string }): Promise<PushResult> {
+    return this.#pushOne(deviceKey, sealed);
+  }
+
+  // 平文のパラメータで 1 台だけ送る (受信の確認)
+  pushPlain(deviceKey: string, params: PushParams): Promise<PushResult> {
+    return this.#pushOne(deviceKey, params);
+  }
+
+  async #pushOne(deviceKey: string, payload: PushParams | { ciphertext: string; iv: string }): Promise<PushResult> {
+    const up = await this.forward("POST", "/push", "application/json; charset=utf-8", JSON.stringify({ ...payload, device_key: deviceKey }));
     const r = parseJsonWith(SinglePushResponseSchema, up.body);
     if (!r.ok) return { device_id: deviceKey, status: up.status, message: `unexpected bark-server response: ${r.error.message}` };
     return {

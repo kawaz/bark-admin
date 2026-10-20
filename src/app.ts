@@ -10,21 +10,23 @@ import { parseJsonWith, parseWith } from "./parse.ts";
 import { encryptForBark, newCryptoIv, newCryptoKey, randomAlnum } from "./push-crypto.ts";
 import {
   archiveDevice,
-  finishCryptoConfirm,
+  finishConfirm,
   freshCrypto,
   listItem,
   patchDevice,
   resolveTargets,
   selectDevices,
-  startCryptoConfirm,
+  startConfirm,
   upsertRegistration,
   view,
 } from "./registry.ts";
 import { pushParamFields, pushParamsSchema, type PushParams } from "./schema/push-params.ts";
 import {
+  ConfirmKindSchema,
   CreateInviteSchema,
   PatchDeviceSchema,
   TagsSchema,
+  type ConfirmKind,
   type CryptoKeyOnly,
   type DeviceRecord,
   type Devices,
@@ -59,7 +61,8 @@ const AdminPushEnvelopeSchema = v.looseObject({ device: v.optional(TagsSchema) }
 // register の要求側の key (使用済みの登録トークンでの再登録の判定用)。bark-server と同じく key / device_key の両方を見る
 const RegisterKeySchema = v.looseObject({ key: v.optional(v.string()), device_key: v.optional(v.string()) });
 
-type ConfirmStart = { kind: "not-found" } | { kind: "no-key" } | { kind: "started"; key: string };
+// started.key は crypto の時の鍵 (delivery は null)
+type ConfirmStart = { kind: "not-found" } | { kind: "no-key" } | { kind: "started"; key: string | null };
 
 function json(status: number, body: unknown): Response {
   return Response.json(body, { status });
@@ -249,44 +252,47 @@ export function createApp(deps: AppDeps) {
     return updated === null ? json(404, { error: `device ${id} not found` }) : json(200, view(id, updated));
   }
 
-  // 鍵が Bark に正しく設定されたかの確認: nonce 入りの URL を暗号化した通知で送る。
-  // 復号できた端末だけが URL を知り、タップで開くと confirmCrypto が確認済みにする
-  async function startConfirm(id: string): Promise<Response> {
+  // 確認: nonce 入りの URL を通知で送り、タップで開かれると finishDeviceConfirm が kind の確認済みを記録する。
+  // delivery は平文で送り「通知が届くか」を、crypto は暗号化して送り「鍵が Bark に正しく設定されたか」を確かめる (復号できた端末だけが URL を知る)
+  async function startDeviceConfirm(id: string, kind: ConfirmKind): Promise<Response> {
     const nonce = randomAlnum(22);
     const started = await store.devices.update((cur): { next?: Devices; result: ConfirmStart } => {
       const r = cur[id];
       if (r === undefined) return { result: { kind: "not-found" } };
-      const next = startCryptoConfirm(r, nonce);
-      if (next === null || next.crypto === null) return { result: { kind: "no-key" } };
-      return { next: { ...cur, [id]: next }, result: { kind: "started", key: next.crypto.key } };
+      const next = startConfirm(r, kind, nonce);
+      if (next === null) return { result: { kind: "no-key" } };
+      return { next: { ...cur, [id]: next }, result: { kind: "started", key: next.crypto?.key ?? null } };
     });
     if (started.kind === "not-found") return json(404, { error: `device ${id} not found` });
     if (started.kind === "no-key") return json(409, { error: `device ${id} has no crypto key. Set one with POST ${ADMIN}/api/devices/${id}/crypto first` });
+    const url = `${serverUrl}${ADMIN}/api/devices/${encodeURIComponent(id)}/confirm/${kind}/${nonce}`;
     const key = started.key;
     return withUpstream(async () => {
-      const r = await pushEncrypted(
-        {
-          title: "bark-admin 暗号化の確認",
-          body: "この通知をタップすると確認が完了する",
-          url: `${serverUrl}${ADMIN}/api/devices/${encodeURIComponent(id)}/crypto/confirm/${nonce}`,
-        },
-        { id, key },
-      );
-      const sent = { ...r, encrypted: true };
+      const r =
+        kind === "crypto" && key !== null
+          ? await pushEncrypted({ title: "bark-admin 暗号化の確認", body: "この通知をタップすると暗号化の確認が完了する", url }, { id, key })
+          : await bark.pushPlain(id, { title: "bark-admin 受信の確認", body: "この通知をタップすると受信確認が完了する", url });
+      const sent = { ...r, encrypted: kind === "crypto" };
       if (r.status === 200) return json(200, { sent });
       return json(502, { error: `bark-server did not accept the confirm notification: ${r.message ?? `status ${r.status}`}`, sent });
     });
   }
 
-  async function confirmCrypto(id: string, nonce: string): Promise<Response> {
+  async function finishDeviceConfirm(id: string, kind: ConfirmKind, nonce: string): Promise<Response> {
     const at = now();
     const ok = await store.devices.update((cur) => {
       const r = cur[id];
-      const next = r === undefined ? null : finishCryptoConfirm(r, nonce, at);
+      const next = r === undefined ? null : finishConfirm(r, kind, nonce, at);
       return next === null ? { result: false } : { next: { ...cur, [id]: next }, result: true };
     });
-    if (!ok) return html(404, notFoundPageHtml("この確認リンクは使用済みか古い。管理画面の「確認」で送り直す。", "確認リンクが見つからない"));
-    return html(200, confirmedPageHtml());
+    if (!ok) return html(404, notFoundPageHtml("この確認リンクは使用済みか古い。確認を送り直す。", "確認リンクが見つからない"));
+    return html(200, confirmedPageHtml(kind));
+  }
+
+  // URL の kind (delivery / crypto)。それ以外は 404
+  function confirmKind(raw: string): ConfirmKind | null {
+    const r = parseWith(ConfirmKindSchema, raw);
+    return r.ok ? r.value : null;
   }
 
   async function createInvite(req: Request): Promise<Response> {
@@ -354,7 +360,17 @@ export function createApp(deps: AppDeps) {
       used_at: rec.used_at,
       expires_at: rec.expires_at,
       encrypted: rec.crypto !== null,
-      device: rec.used_by === null || dev === undefined ? null : { device_id: rec.used_by, tags: dev.tags, ...(dev.info === undefined ? {} : { info: dev.info }) },
+      device:
+        rec.used_by === null || dev === undefined
+          ? null
+          : {
+              device_id: rec.used_by,
+              tags: dev.tags,
+              ...(dev.info === undefined ? {} : { info: dev.info }),
+              // 招待ページの受信確認・暗号化の段が見る
+              delivery: { confirmed_at: dev.delivery?.confirmed_at ?? null },
+              crypto: dev.crypto === null ? null : { confirmed_at: dev.crypto.confirmed_at },
+            },
     });
   }
 
@@ -403,12 +419,18 @@ export function createApp(deps: AppDeps) {
         return updateDevice(req.params.id, (rec) => ({ ...rec, crypto: freshCrypto({ key }) }));
       },
     },
-    [`${ADMIN}/api/devices/:id/crypto/confirm`]: {
-      POST: (req: Bun.BunRequest<"/bark-admin/api/devices/:id/crypto/confirm">) => startConfirm(req.params.id),
+    [`${ADMIN}/api/devices/:id/confirm/:kind`]: {
+      POST: (req: Bun.BunRequest<"/bark-admin/api/devices/:id/confirm/:kind">) => {
+        const kind = confirmKind(req.params.kind);
+        return kind === null ? json(404, { error: `unknown confirm kind ${req.params.kind}. Use delivery or crypto` }) : startDeviceConfirm(req.params.id, kind);
+      },
     },
     // 確認通知の url。iPhone の Safari で開かれるので HTML を返す
-    [`${ADMIN}/api/devices/:id/crypto/confirm/:nonce`]: {
-      GET: (req: Bun.BunRequest<"/bark-admin/api/devices/:id/crypto/confirm/:nonce">) => confirmCrypto(req.params.id, req.params.nonce),
+    [`${ADMIN}/api/devices/:id/confirm/:kind/:nonce`]: {
+      GET: (req: Bun.BunRequest<"/bark-admin/api/devices/:id/confirm/:kind/:nonce">) => {
+        const kind = confirmKind(req.params.kind);
+        return kind === null ? html(404, notFoundPageHtml("この確認リンクは形が違う。確認を送り直す。", "確認リンクが見つからない")) : finishDeviceConfirm(req.params.id, kind, req.params.nonce);
+      },
     },
     [`${ADMIN}/api/invites`]: { GET: listInvites, POST: createInvite },
     [`${ADMIN}/api/registrations/:token`]: {

@@ -1,70 +1,135 @@
-import { writeClipboard } from "./common.js";
+import { errorMessage, writeClipboard } from "./common.js";
 
-// 招待ページ: 「Bark にサーバーを追加」は 1 回だけ押せる (Bark はサーバーの重複を見ないので、押し直すと行が増え、2 回目以降は登録トークンが使用済みで key の無い行が残る)。
-// 押した後は登録トークンの状態を読み、登録できたら結果と (暗号化するなら) 暗号化キーの節を出す。
+// 招待ページ: 3 段のステップ (1. サーバーを追加 → 2. 受信確認 → 3. 暗号化) を、登録トークンの状態 (GET /bark-admin/api/registrations/:token) から描く。
+// 1 段目のボタンは 1 回だけ押せる (Bark はサーバーの重複を見ないので、押し直すと行が増え、2 回目以降は登録トークンが使用済みで key の無い行が残る)。
 
 const $ = (sel) => document.querySelector(sel);
-const add = $("#add");
-const token = add.dataset.token;
+const flow = $("#flow");
+const token = flow.dataset.token;
 const api = `/bark-admin/api/registrations/${encodeURIComponent(token)}`;
-const button = $("#add-server");
-const status = $("#add-status");
+const addButton = $("#add-server");
+const hasCrypto = $("#step-crypto") !== null;
+// 受信確認の通知は登録を見つけた時に 1 回だけ自動で送る。読み込み直しや visibilitychange で重ねて送らないよう、送ったことをタブに残す
+const DELIVERY_SENT = `bark-admin:delivery-sent:${token}`;
 
 let timer = null;
-let settled = false;
+let finished = false;
+let deviceId = null;
 
-function stop() {
-  settled = true;
+// mode: done (✓ と 1 行) / current (中身を見せて強調) / later (見出しだけ薄く)
+function setStep(id, mode, doneText = "") {
+  const li = $(`#step-${id}`);
+  if (li === null) return;
+  li.className = `step ${mode}`;
+  li.querySelector(".body").hidden = mode !== "current";
+  const line = li.querySelector(".done-line");
+  line.textContent = doneText;
+  line.hidden = mode !== "done" || doneText === "";
+}
+
+function finish(message) {
+  finished = true;
   clearInterval(timer);
+  $("#flow-status").textContent = message;
+}
+
+function unusable() {
+  addButton.remove();
+  $("#no-bark").hidden = true;
+  $("#add-status").textContent = "この招待は使えない。QR を読み直す";
+  setStep("add", "current");
+  finish("");
 }
 
 function render(r) {
-  if (r.state === "used") {
-    stop();
-    button.remove();
-    status.classList.add("done");
-    status.textContent = `追加できた: ${r.device?.tags.name ?? r.used_by}`;
-    // 「Bark に切り替わったら…」の案内は済んだので隠す (タグは残す)
-    $("#add-guide").hidden = true;
-    if (r.encrypted) $("#crypto").hidden = false;
-  } else if (r.state === "expired" || r.state === "invite-deleted") {
-    stop();
-    button.remove();
-    status.textContent = "この招待は使えない。QR を読み直す";
-  } else if (button.disabled) {
-    status.textContent = "Bark で追加中…。終わらないときは、このページを読み込み直してやり直す";
+  if (r.state === "expired" || r.state === "invite-deleted") return unusable();
+  if (r.state !== "used") {
+    if (addButton.disabled) $("#add-status").textContent = "Bark で追加中…。終わらないときは、このページを読み込み直してやり直す";
+    return;
   }
+  deviceId = r.used_by;
+  setStep("add", "done", `追加できた: ${r.device?.tags.name ?? r.used_by}`);
+  sendDeliveryOnce();
+  if ((r.device?.delivery.confirmed_at ?? null) === null) {
+    setStep("delivery", "current");
+    setStep("crypto", "later");
+    return;
+  }
+  setStep("delivery", "done", "受信を確認できた");
+  if (!hasCrypto) return finish("すべて済んだ。このページは閉じてよい");
+  if ((r.device?.crypto?.confirmed_at ?? null) === null) return setStep("crypto", "current");
+  setStep("crypto", "done", "暗号化を確認できた");
+  finish("すべて済んだ。このページは閉じてよい");
 }
 
 async function check() {
-  if (settled) return;
+  if (finished) return;
   const res = await fetch(api, { cache: "no-store" });
-  if (res.status === 404) {
-    stop();
-    button.remove();
-    status.textContent = "この招待は使えない。QR を読み直す";
-    return;
-  }
+  if (res.status === 404) return unusable();
   if (res.ok) render(await res.json());
 }
 
-// Design rationale: 登録は Bark アプリが別経路 (/r/<token>/register) で行うので、ページから見える完了の合図が無い。
-// 台数 1 桁・数分で終わる操作なので、押した後だけ 2 秒間隔で読み、Bark から戻ってきた時 (visibilitychange) は即読む
-button.addEventListener("click", () => {
-  button.disabled = true;
-  button.textContent = "Bark で追加中…";
-  location.href = add.dataset.href;
-  timer = setInterval(check, 2000);
+// Design rationale: 登録は Bark アプリが、確認は通知のタップで開く別ページが行うので、このページに完了の合図は届かない。
+// 台数 1 桁・数分で終わる操作なので、1 段目を押してから全部済むまで 2 秒間隔で読み、このページに戻ってきた時 (visibilitychange) は即読む
+function startPolling() {
+  if (timer === null && !finished) timer = setInterval(check, 2000);
+}
+
+async function sendConfirm(kind, status) {
+  status.textContent = "送っている";
+  const res = await fetch(`/bark-admin/api/devices/${encodeURIComponent(deviceId)}/confirm/${kind}`, { method: "POST" });
+  status.textContent = res.ok ? "送った。届いた通知をタップする" : `送れなかった: ${await errorMessage(res)}`;
+  return res.ok;
+}
+
+async function sendDeliveryOnce() {
+  if (sessionStorage.getItem(DELIVERY_SENT) !== null) return;
+  sessionStorage.setItem(DELIVERY_SENT, "1");
+  startPolling();
+  if (!(await sendConfirm("delivery", $("#delivery-status")))) sessionStorage.removeItem(DELIVERY_SENT);
+}
+
+// ---------- 1. サーバーを追加 ----------
+
+// Bark が開けば Safari は裏に回る (hidden)。1.5 秒たっても回らなければ未導入とみなして App Store への案内を出し、押し直せるようにする
+let wentHidden = false;
+addButton.addEventListener("click", () => {
+  addButton.disabled = true;
+  addButton.textContent = "Bark で追加中…";
+  wentHidden = false;
+  location.href = addButton.dataset.href;
+  startPolling();
+  setTimeout(() => {
+    if (wentHidden || finished) return;
+    $("#no-bark").hidden = false;
+    addButton.disabled = false;
+    addButton.textContent = "Bark にサーバーを追加";
+  }, 1500);
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") check();
+  if (document.visibilityState === "hidden") {
+    wentHidden = true;
+    // 案内を出した後で Bark が開いた場合も、押し直しで行が増えないよう閉じる
+    $("#no-bark").hidden = true;
+    if (addButton.isConnected && !addButton.disabled) {
+      addButton.disabled = true;
+      addButton.textContent = "Bark で追加中…";
+    }
+  } else {
+    check();
+  }
 });
 check();
 
-// 暗号化キー: 押した時に取り、クリックの同期区間でクリップボードへの書き込みを始める (鍵は Promise のまま渡す)。
+// ---------- 2. 受信確認 ----------
+
+$("#delivery-again").addEventListener("click", () => sendConfirm("delivery", $("#delivery-status")));
+
+// ---------- 3. 暗号化 ----------
+
+// 押した時に鍵を取り、クリックの同期区間でクリップボードへの書き込みを始める (鍵は Promise のまま渡す)。
 // 写せたら Bark を前に出す。写せなかった時だけ鍵を見せて手で入れてもらう
-const copy = $("#crypto-copy");
-copy?.addEventListener("click", async () => {
+$("#crypto-copy")?.addEventListener("click", async () => {
   const key = fetch(`${api}/crypto-key`, { cache: "no-store" }).then(async (r) => {
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return (await r.json()).key;
@@ -87,4 +152,7 @@ copy?.addEventListener("click", async () => {
     code.removeAttribute("aria-label");
     $("#crypto-status").textContent = "コピーできなかった。上の鍵を手で入力する";
   }
+});
+$("#crypto-confirm")?.addEventListener("click", async () => {
+  if (await sendConfirm("crypto", $("#crypto-confirm-status"))) startPolling();
 });
