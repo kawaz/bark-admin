@@ -10,6 +10,27 @@ function setTime(node, iso) {
   node.title = iso;
 }
 
+// 端末情報の並び (DESIGN.md のデータ節の順)。無い項目は出さない
+const INFO_KEYS = ["os_version", "bark_version", "bark_build", "lang", "ts_hostname", "ts_name", "ts_os", "ts_user", "ts_ip", "user_agent", "browser_user_agent", "browser_hints", "last_register_at"];
+
+function fact(label, value) {
+  const dd = document.createElement("dd");
+  dd.append(value);
+  return [Object.assign(document.createElement("dt"), { textContent: label }), dd];
+}
+
+function renderInfo(info) {
+  const rows = INFO_KEYS.filter((k) => info[k] !== undefined).flatMap((k) => {
+    const value = info[k];
+    // Sec-CH-UA* はヘッダ名ごとに 1 行
+    if (k === "browser_hints") return Object.entries(value).flatMap(([name, v]) => fact(name, v));
+    if (k === "last_register_at") return fact(k, Object.assign(document.createElement("time"), { dateTime: value, textContent: formatAt(value), title: value }));
+    return fact(k, value);
+  });
+  $("#info-facts").replaceChildren(...rows);
+  $("#info").hidden = rows.length === 0;
+}
+
 function render(d) {
   const { name, owner } = d.tags;
   $("#detail").hidden = false;
@@ -23,6 +44,7 @@ function render(d) {
   if (d.device_token === "") $("#device-token").textContent = "なし。Bark アプリを起動すると登録し直される";
   else $("#device-token").replaceChildren(Object.assign(document.createElement("code"), { textContent: d.device_token }));
   $("#tags").value = formatTagLines(d.tags);
+  renderInfo(d.info);
   const archived = d.archived_at !== null;
   $("#archived-banner").hidden = !archived;
   if (archived) setTime($("#archived-at"), d.archived_at);

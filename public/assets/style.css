@@ -398,7 +398,8 @@ main.top {
     font-weight: 600;
     color: var(--danger);
   }
-  .encrypted {
+  .encrypted,
+  .os {
     font-size: var(--step--1);
     color: var(--muted);
   }

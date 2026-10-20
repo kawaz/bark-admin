@@ -65,6 +65,7 @@ function deviceItem(d) {
     "a",
     { className: "who", href: `/bark-admin/devices/${encodeURIComponent(d.device_id)}` },
     el("span", { className: nameClass, textContent: name ?? "名前なし" }),
+    ...(d.info.os_version === undefined ? [] : [el("span", { className: "os", textContent: d.info.os_version })]),
     el("span", { className: "id", textContent: d.device_id }),
     ...(d.crypto === null ? [] : [el("span", { className: "encrypted", textContent: d.crypto.confirmed_at === null ? "暗号化 (未確認)" : "暗号化" })]),
     ...(archived ? [el("span", { className: "retired", textContent: `退役 ${formatAt(d.archived_at)}` })] : []),
