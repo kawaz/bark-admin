@@ -42,6 +42,20 @@
       </div>
     </form>
 
+    <section class="crypto stack" aria-labelledby="crypto-heading">
+      <h2 id="crypto-heading">暗号化</h2>
+      <p id="crypto-state"></p>
+      <div id="crypto-on" class="stack" hidden>
+        <div class="key-row"><code id="crypto-key" class="key"></code><button id="crypto-copy" type="button" class="secondary">コピー</button></div>
+        <p class="hint">Bark の「推送加密 / Push Encryption」で Algorithm を AES256、Mode を GCM、Padding を noPadding にし、Key にこの鍵を貼る。鍵を作り直したら Bark 側も貼り直す</p>
+        <div class="actions">
+          <button id="crypto-renew" type="button" class="secondary">鍵を作り直す</button>
+          <button id="crypto-disable" type="button" class="secondary">暗号化を無効にする</button>
+        </div>
+      </div>
+      <button id="crypto-enable" type="button" hidden>暗号化を有効にする</button>
+    </section>
+
     <section id="retire" class="retire stack" aria-labelledby="retire-heading">
       <h2 id="retire-heading">退役</h2>
       <p class="hint">送信対象と一覧から外す。登録は残るので、あとで復帰できる</p>

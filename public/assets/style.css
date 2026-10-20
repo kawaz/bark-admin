@@ -398,6 +398,10 @@ main.top {
     font-weight: 600;
     color: var(--danger);
   }
+  .encrypted {
+    font-size: var(--step--1);
+    color: var(--muted);
+  }
 }
 
 .tags:empty {
@@ -747,6 +751,34 @@ main.detail {
 .retire {
   padding-block-start: 1.5rem;
   border-block-start: 1px solid var(--line);
+}
+
+/* 暗号化キー (詳細と招待ページ)。Bark に 1 字ずつ照合して貼るものなので固定幅で、コピーボタンと並べる */
+.key-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  justify-self: stretch;
+}
+
+code.key {
+  flex: 1 1 16rem;
+  min-inline-size: 0;
+  padding: 0.5rem 0.75rem;
+  font-size: 1rem;
+  overflow-wrap: anywhere;
+  user-select: all;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+ol.steps {
+  margin: 0;
+  padding-inline-start: 1.25rem;
+  font-size: var(--step--1);
+  color: var(--muted);
 }
 
 /* ---------- 招待ページ (iPhone の Safari で開く) ---------- */

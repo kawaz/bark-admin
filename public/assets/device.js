@@ -1,4 +1,4 @@
-import { errorMessage, formatAt, formatTagLines, parseTagLines } from "./common.js";
+import { copyText, errorMessage, formatAt, formatTagLines, parseTagLines } from "./common.js";
 
 const $ = (sel) => document.querySelector(sel);
 const id = decodeURIComponent(location.pathname.split("/").at(-1));
@@ -27,10 +27,17 @@ function render(d) {
   $("#archived-banner").hidden = !archived;
   if (archived) setTime($("#archived-at"), d.archived_at);
   $("#retire").hidden = archived;
+  const encrypted = d.crypto !== null;
+  $("#crypto-state").textContent = encrypted
+    ? "有効。通知の中身をこの鍵で暗号化して送る。bark-server と APNs からは読めない"
+    : "無効。通知は暗号化せずに bark-server と APNs を通る";
+  $("#crypto-on").hidden = !encrypted;
+  $("#crypto-enable").hidden = encrypted;
+  $("#crypto-key").textContent = encrypted ? d.crypto.key : "";
 }
 
-async function call(method, body) {
-  const res = await fetch(api, {
+async function call(method, body, path = "") {
+  const res = await fetch(`${api}${path}`, {
     method,
     ...(body === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
   });
@@ -67,3 +74,12 @@ $("#archive").addEventListener("click", async () => {
   if (confirm(`${name} (${id}) を退役させる? 送信対象と一覧から外れる。あとで復帰できる`)) await call("DELETE");
 });
 $("#restore").addEventListener("click", () => call("PATCH", { archived_at: null }));
+
+$("#crypto-copy").addEventListener("click", (ev) => copyText(ev.currentTarget, $("#crypto-key").textContent));
+$("#crypto-enable").addEventListener("click", () => call("POST", undefined, "/crypto"));
+$("#crypto-renew").addEventListener("click", async () => {
+  if (confirm("鍵を作り直す? Bark 側に新しい鍵を貼り直すまで、この端末は通知を読めない")) await call("POST", undefined, "/crypto");
+});
+$("#crypto-disable").addEventListener("click", async () => {
+  if (confirm("暗号化を無効にする? 以後の通知は暗号化せずに送る")) await call("PATCH", { crypto: null });
+});

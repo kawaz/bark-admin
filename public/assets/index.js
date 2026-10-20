@@ -5,7 +5,6 @@ const GROUP_LABELS = {
   display: "表示・グループ",
   alert: "通知音・割り込み",
   action: "コピー・タップ時",
-  encryption: "暗号化",
   archive: "履歴・管理",
 };
 // 通知テストで常に出す項目。残りは「ほかの項目」に畳む
@@ -67,6 +66,7 @@ function deviceItem(d) {
     { className: "who", href: `/bark-admin/devices/${encodeURIComponent(d.device_id)}` },
     el("span", { className: nameClass, textContent: name ?? "名前なし" }),
     el("span", { className: "id", textContent: d.device_id }),
+    ...(d.encrypted ? [el("span", { className: "encrypted", textContent: "暗号化" })] : []),
     ...(archived ? [el("span", { className: "retired", textContent: `退役 ${formatAt(d.archived_at)}` })] : []),
   );
   const hidden = others.slice(SHOWN_TAGS);
@@ -254,7 +254,7 @@ function setupInvite() {
       error.hidden = false;
       return;
     }
-    const res = await fetch("/bark-admin/api/invites", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tags }) });
+    const res = await fetch("/bark-admin/api/invites", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tags, encrypt: $("#invite-encrypt").checked }) });
     if (!res.ok) {
       error.textContent = `招待を作れなかった: ${await errorMessage(res)}`;
       error.hidden = false;
@@ -265,6 +265,7 @@ function setupInvite() {
     $("#invite-add-url").href = inv.add_url;
     $("#invite-add-url").textContent = inv.add_url;
     $("#invite-addserver-url").href = inv.addserver_url;
+    $("#invite-crypto-note").hidden = inv.crypto === null;
     $("#invite-tags-shown").replaceChildren(...Object.entries(tags).map(([k, v]) => el("li", { className: "tag", textContent: `${k}=${v}` })));
     form.hidden = true;
     result.hidden = false;
