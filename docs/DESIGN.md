@@ -19,7 +19,7 @@ Web UI (人) ──────┘
 - bark-admin が `bark.<host>` の唯一の upstream。bark-server は直接叩かない (bark 互換の要求も bark-admin の root 面を経由する)
 - どちらも常駐せず、canddy の on-demand 起動 (502 → ensure スクリプト → 302)。bark-admin の ensure スクリプト (`ondemand/bark-admin-ensure.sh`) が bark-server の ensure (canddy-app-proxy の `ondemand/bark-server-ensure.sh`) も呼ぶ
 - bun + TypeScript。スキーマは valibot で定義し型を導く (境界で parse、`as` / `any` / `!` 禁止)
-- 設定: `${XDG_CONFIG_HOME}/bark-admin/config.toml` に `server_url` (招待 URL / QR に埋める公開 URL、例 `https://bark.kawaz-mbp16-20211217.kawaz.jp`) と `db_path` (登録簿の置き場) の 2 つ。listen port (8086) と bark-server の upstream (`127.0.0.1:8085`) は既定値で、変えるときは env `BARK_ADMIN_ADDR` / `BARK_SERVER_URL`
+- 設定: `${XDG_CONFIG_HOME}/bark-admin/config.toml` に `server_url` (招待 URL / QR に埋める公開 URL、例 `https://bark.kawaz-mbp16-20211217.kawaz.jp`) と `db_path` (登録簿の置き場) の 2 つ。listen port (8086) と bark-server の upstream (`127.0.0.1:8085`) は既定値で、変えるときは env `BARK_ADMIN_ADDR` / `BARK_SERVER_URL`。`X-Forwarded-For` を信頼する前段は既定で loopback だけで、足すときは env `BARK_ADMIN_TRUSTED_PROXIES` (CIDR のカンマ区切り)
 - データ: `${XDG_DATA_HOME}/bark-admin/devices.json` (= `db_path` の既定) (atomic rename で書く。台数が 1 桁なので DB を持たず手で直せる方を優先)。招待は `invites.json`、登録トークンは `registrations.json` (同じディレクトリ)。1 回限りの招待だった頃の `invites.json` (`used_by` を持つ行) は起動時に `invites.legacy-<日時>.json` へ退けて空から始める
 - ログ: `${XDG_STATE_HOME}/bark-admin/server.log`
 
@@ -65,9 +65,10 @@ Web UI (人) ──────┘
 登録 (`/register` と `/r/<token>/register`) のたびに、要求から観察できる値を `info` に記録し、そこからタグを自動で付ける。実装は `src/device-info.ts`。
 
 - Bark アプリの要求のヘッダは `User-Agent: Bark/<版> (me.fin.bark; build:<build>; <OS> <版>) Alamofire/<版>` と `Accept-Language` だけ (Sec-CH-UA 等は来ない)。UA がこの形でなければ `bark_version` / `bark_build` / `os_version` は付けない
-- canddy が付ける `X-Forwarded-For` の末尾の IP を `/Applications/Tailscale.app/Contents/MacOS/Tailscale whois --json <ip>` (PATH に無い前提の絶対パス、タイムアウト 2 秒) で引き、`Node.Name` (末尾の `.` を落とす) / `Node.ComputedName` (Tailscale のマシン名。管理画面で付け替えられる → `ts_machine`) / `Node.Hostinfo.Hostname` (iPadOS は `localhost` を返す) / `Node.Hostinfo.OS` / `UserProfile.LoginName` を `ts_*` に写す。whois は bark-server の応答を待つ間に走らせ、失敗・タイムアウト・null の項目は書かないだけで登録は通す
+- 端末の IP: 接続元の実 IP (`server.requestIP`) が loopback (`127.0.0.0/8`, `::1`) か env `BARK_ADMIN_TRUSTED_PROXIES` (CIDR のカンマ区切り) に含まれる時だけ `X-Forwarded-For` の末尾 (= 前段の Caddy が見た接続元) を使い、それ以外は接続元の IP をそのまま使う。XFF は Caddy (loopback) 経由の時だけ信頼する (他から来た XFF は誰でも書ける)。実装は `src/client-ip.ts`
+- Tailscale があれば `ts_*` も記録する: その IP を `/Applications/Tailscale.app/Contents/MacOS/Tailscale whois --json <ip>` (PATH に無い前提の絶対パス、タイムアウト 2 秒) で引き、`Node.Name` (末尾の `.` を落とす) / `Node.ComputedName` (Tailscale のマシン名 → `ts_machine`) / `Node.Hostinfo.Hostname` (iPadOS は `localhost`) / `Node.Hostinfo.OS` / `UserProfile.LoginName` を `ts_*` に写す。whois は bark-server の応答を待つ間に走らせる。CLI が無い・失敗・タイムアウトなら黙って何も書かず、登録も自動タグも Tailscale 無しで完結する (起動時に CLI が無ければ「tailscale: not available」を 1 行だけログに出す)
 - 招待ページの JS が、表示した時に 1 回 `POST /bark-admin/api/registrations/<token>/client` で `{user_agent, platform, max_touch_points, language, screen: {w, h, dpr}}` を送り、登録トークンの `client` に残す。そのトークンでの登録で `device_kind` と `browser_*` に写す (アプリはトークン入り URL で再登録し続けるので、再登録でも写り続ける)。HTTP ヘッダでは iPad を見分けられない (iPad の Safari はデスクトップ表示で `Macintosh` を名乗り、Bark の UA も Tailscale も `iOS` と報告する) ので、よく使われる判定をそのまま使う: `platform` が `MacIntel` かつ `max_touch_points > 1` → ipad、UA に `iPad` → ipad、`iPhone` → iphone、`Macintosh` でタッチ無し → mac、`Android` → android
-- 自動タグ: `name` = `ts_machine` (Tailscale のマシン名) の小文字 (`Hostinfo.Hostname` は iPadOS が localhost になるので使わない)、`os` = `device_kind` から `ipados` / `ios` / `macos` / `android` (無ければ `ts_os`、それも無ければ UA の OS 名の小文字)、`lang` = Accept-Language の先頭の言語の主タグ (`ja`)、`ts_user` = `ts_user`。`owner` は人が決めるので付けない
+- 自動タグ (Tailscale に依存しない): `name` = 端末の種類そのまま (`iphone` / `ipad` / `mac` / `android`。`device_kind`、無ければ Bark の UA の OS が `iOS` なら `iphone`、それも無ければ付けない。name は自由記入欄で後から人が直す前提なので凝らない)、`os` = その種類の OS (`ios` / `ipados` / `macos` / `android`、種類が無ければ UA の OS 名の小文字)、`lang` = Accept-Language の先頭の言語の主タグ (`ja`)、`ts_user` = whois が取れた時だけ LoginName。`owner` は人が決めるので付けない
 - タグの優先は 招待 > 既存 > 自動。自動タグは device の `tags` に無いキーだけ埋める (人が消した自動タグは次の登録で戻る)。招待のタグは登録トークンを使う登録 (未使用のトークン) でだけ付け、使用済みトークンでの再登録では付け直さない (人が直したタグを戻さない)
 
 ## 暗号化
