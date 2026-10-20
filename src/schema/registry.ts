@@ -21,6 +21,34 @@ export const DeviceCryptoSchema = v.strictObject({
 });
 export type DeviceCrypto = v.InferOutput<typeof DeviceCryptoSchema>;
 
+// 招待ページを開いたブラウザ。登録時に device.info の browser_* へ写す
+export const InviteBrowserSchema = v.object({
+  user_agent: v.optional(v.string()),
+  // Sec-CH-UA* ヘッダ (小文字の名前 → 値)。Safari は送らない
+  hints: v.optional(v.record(v.string(), v.string())),
+});
+export type InviteBrowser = v.InferOutput<typeof InviteBrowserSchema>;
+
+// 登録の要求から観察した端末情報。人は編集せず、再登録のたびに丸ごと置き換わる (出どころは src/device-info.ts)
+export const DeviceInfoSchema = v.object({
+  bark_version: v.optional(v.string()),
+  bark_build: v.optional(v.string()),
+  // UA の OS 名と版 (`iOS 26.7.1`)
+  os_version: v.optional(v.string()),
+  user_agent: v.optional(v.string()),
+  // Accept-Language の値そのまま
+  lang: v.optional(v.string()),
+  ts_name: v.optional(v.string()),
+  ts_hostname: v.optional(v.string()),
+  ts_os: v.optional(v.string()),
+  ts_user: v.optional(v.string()),
+  ts_ip: v.optional(v.string()),
+  browser_user_agent: v.optional(v.string()),
+  browser_hints: v.optional(v.record(v.string(), v.string())),
+  last_register_at: v.optional(v.string()),
+});
+export type DeviceInfo = v.InferOutput<typeof DeviceInfoSchema>;
+
 export const DeviceRecordSchema = v.object({
   device_token: v.string(),
   registered_at: v.string(),
@@ -28,6 +56,8 @@ export const DeviceRecordSchema = v.object({
   tags: TagsSchema,
   // null は暗号化しない。crypto キーを省いた行 (手で書いた登録簿) も null として読む
   crypto: v.optional(v.nullable(DeviceCryptoSchema), null),
+  // 次の登録で埋まる。それまでの行 (と手で書いた行) には無い
+  info: v.optional(DeviceInfoSchema),
 });
 export type DeviceRecord = v.InferOutput<typeof DeviceRecordSchema>;
 
@@ -40,6 +70,8 @@ export const InviteRecordSchema = v.object({
   used_by: v.nullable(v.string()),
   // 登録時に device へ写す鍵。招待ページで端末の持ち主に見せる
   crypto: v.optional(v.nullable(CryptoKeyOnlySchema), null),
+  // 未使用のうちに招待ページを最後に開いたブラウザ
+  browser: v.optional(v.nullable(InviteBrowserSchema), null),
 });
 export type InviteRecord = v.InferOutput<typeof InviteRecordSchema>;
 
@@ -47,10 +79,14 @@ export const InvitesSchema = v.record(v.string(), InviteRecordSchema);
 export type Invites = v.InferOutput<typeof InvitesSchema>;
 
 // API で外に出す 1 device の形 (キーだった device_id を中に持つ)。pending_nonce は確認の根拠なので外に出さない
-export type DeviceView = { device_id: string } & Omit<DeviceRecord, "crypto"> & { crypto: { key: string; confirmed_at: string | null } | null };
+// info の無い行も {} で出す
+export type DeviceView = { device_id: string } & Omit<DeviceRecord, "crypto" | "info"> & { crypto: { key: string; confirmed_at: string | null } | null; info: DeviceInfo };
 
-// 一覧 (GET /api/devices) の 1 行。鍵は詳細でだけ見せ、一覧には暗号化の有無と確認状態だけ出す
-export type DeviceListItem = { device_id: string } & Omit<DeviceRecord, "crypto"> & { crypto: { confirmed_at: string | null } | null };
+// 一覧 (GET /api/devices) の 1 行。鍵は詳細でだけ見せ、一覧には暗号化の有無と確認状態だけ出す。info は一覧の表示に使う 2 項目だけ
+export type DeviceListItem = { device_id: string } & Omit<DeviceRecord, "crypto" | "info"> & {
+  crypto: { confirmed_at: string | null } | null;
+  info: Pick<DeviceInfo, "ts_hostname" | "os_version">;
+};
 
 export const PatchDeviceSchema = v.pipe(
   v.strictObject({

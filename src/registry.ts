@@ -1,4 +1,4 @@
-import type { CryptoKeyOnly, DeviceCrypto, DeviceListItem, DeviceRecord, Devices, DeviceView, PatchDevice, Tags } from "./schema/registry.ts";
+import type { CryptoKeyOnly, DeviceCrypto, DeviceInfo, DeviceListItem, DeviceRecord, Devices, DeviceView, PatchDevice, Tags } from "./schema/registry.ts";
 
 // 登録簿の操作 (純粋関数)。永続化は store.ts が受け持つ。
 
@@ -7,8 +7,8 @@ export function matchTags(tags: Tags, filter: Tags): boolean {
   return Object.entries(filter).every(([k, val]) => tags[k] === val);
 }
 
-export function view(id: string, { crypto, ...rest }: DeviceRecord): DeviceView {
-  return { device_id: id, ...rest, crypto: crypto === null ? null : { key: crypto.key, confirmed_at: crypto.confirmed_at } };
+export function view(id: string, { crypto, info, ...rest }: DeviceRecord): DeviceView {
+  return { device_id: id, ...rest, crypto: crypto === null ? null : { key: crypto.key, confirmed_at: crypto.confirmed_at }, info: info ?? {} };
 }
 
 export function selectDevices(devices: Devices, filter: Tags, includeArchived: boolean): DeviceView[] {
@@ -17,9 +17,9 @@ export function selectDevices(devices: Devices, filter: Tags, includeArchived: b
     .map(([id, rec]) => view(id, rec));
 }
 
-// 一覧に出す形。鍵そのものは落とし、暗号化の有無と確認状態だけ残す
-export function listItem({ crypto, ...rest }: DeviceView): DeviceListItem {
-  return { ...rest, crypto: crypto === null ? null : { confirmed_at: crypto.confirmed_at } };
+// 一覧に出す形。鍵そのものは落とし、暗号化の有無と確認状態だけ残す。info は端末名の脇に出す 2 項目だけ
+export function listItem({ crypto, info, ...rest }: DeviceView): DeviceListItem {
+  return { ...rest, crypto: crypto === null ? null : { confirmed_at: crypto.confirmed_at }, info: { ts_hostname: info.ts_hostname, os_version: info.os_version } };
 }
 
 // 新しい鍵 (作り直し含む) は未確認から始める
@@ -36,16 +36,32 @@ export function resolveTargets(devices: Devices, filter: Tags): { deviceIds: str
   };
 }
 
-// bark-server が登録を受けた結果を写す。新規は tags / crypto (招待の値) 付きで作り、既存は token だけ更新する。
+// タグの優先は 招待 > 既存 > 自動。自動タグは device に無いキーだけ、既存のタグの後ろに足す (人が並べた順を崩さない)
+export function mergeTags(invite: Tags, existing: Tags, auto: Tags): Tags {
+  const tags: Tags = { ...existing, ...invite };
+  for (const [k, val] of Object.entries(auto)) if (tags[k] === undefined) tags[k] = val;
+  return tags;
+}
+
+// bark-server が登録を受けた結果を写す。新規は crypto (招待の値) 付きで作り、既存は token を更新する。
+// tags は使う招待のタグ (再登録では空)、info は今回の観察値で丸ごと置き換え、自動タグは info から作る
 export function upsertRegistration(
   devices: Devices,
-  reg: { deviceId: string; deviceToken: string; tags: Tags; crypto: CryptoKeyOnly | null; now: string },
+  reg: { deviceId: string; deviceToken: string; tags: Tags; crypto: CryptoKeyOnly | null; info: DeviceInfo; autoTags: Tags; now: string },
 ): { devices: Devices; created: boolean } {
   const cur = devices[reg.deviceId];
   if (cur !== undefined) {
-    return { devices: { ...devices, [reg.deviceId]: { ...cur, device_token: reg.deviceToken } }, created: false };
+    const next: DeviceRecord = { ...cur, device_token: reg.deviceToken, tags: mergeTags(reg.tags, cur.tags, reg.autoTags), info: reg.info };
+    return { devices: { ...devices, [reg.deviceId]: next }, created: false };
   }
-  const rec: DeviceRecord = { device_token: reg.deviceToken, registered_at: reg.now, archived_at: null, tags: reg.tags, crypto: reg.crypto === null ? null : freshCrypto(reg.crypto) };
+  const rec: DeviceRecord = {
+    device_token: reg.deviceToken,
+    registered_at: reg.now,
+    archived_at: null,
+    tags: mergeTags(reg.tags, {}, reg.autoTags),
+    crypto: reg.crypto === null ? null : freshCrypto(reg.crypto),
+    info: reg.info,
+  };
   return { devices: { ...devices, [reg.deviceId]: rec }, created: true };
 }
 

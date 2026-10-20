@@ -3,6 +3,7 @@ import { join } from "node:path";
 import QRCode from "qrcode";
 import * as v from "valibot";
 import { BarkServer, RegisterResponseSchema, UpstreamError, type PushResult } from "./bark-server.ts";
+import { autoTags, browserFromHeaders, forwardedIp, observeRegistration, tailscaleWhois, type TailnetInfo, type Whois } from "./device-info.ts";
 import { addPageHtml, confirmedPageHtml, notFoundPageHtml } from "./pages/add.ts";
 import { parseJsonWith, parseWith } from "./parse.ts";
 import { encryptForBark, newCryptoIv, newCryptoKey, randomAlnum } from "./push-crypto.ts";
@@ -19,7 +20,16 @@ import {
   view,
 } from "./registry.ts";
 import { pushParamFields, pushParamsSchema, type PushParams } from "./schema/push-params.ts";
-import { CreateInviteSchema, PatchDeviceSchema, TagsSchema, type CryptoKeyOnly, type DeviceRecord, type Devices, type Tags } from "./schema/registry.ts";
+import {
+  CreateInviteSchema,
+  PatchDeviceSchema,
+  TagsSchema,
+  type CryptoKeyOnly,
+  type DeviceRecord,
+  type Devices,
+  type InviteBrowser,
+  type Tags,
+} from "./schema/registry.ts";
 import type { Store } from "./store.ts";
 import { localIso } from "./time.ts";
 
@@ -35,6 +45,8 @@ export type AppDeps = {
   store: Store;
   bark: BarkServer;
   now?: () => string;
+  // X-Forwarded-For の IP から tailnet の端末情報を引く (既定は tailscale whois)
+  whois?: Whois;
 };
 
 const PUBLIC_DIR = join(import.meta.dir, "..", "public");
@@ -91,6 +103,7 @@ function requestedKey(url: URL, contentType: string | null, body: ArrayBuffer): 
 export function createApp(deps: AppDeps) {
   const { store, bark, serverUrl } = deps;
   const now = deps.now ?? (() => localIso());
+  const whois = deps.whois ?? tailscaleWhois;
 
   async function withUpstream(fn: () => Promise<Response>): Promise<Response> {
     try {
@@ -113,6 +126,7 @@ export function createApp(deps: AppDeps) {
 
     let inviteTags: Tags = {};
     let inviteCrypto: CryptoKeyOnly | null = null;
+    let inviteBrowser: InviteBrowser | null = null;
     let inviteUnused = false;
     if (invite !== null) {
       const rec = (await store.invites.read())[invite];
@@ -123,17 +137,26 @@ export function createApp(deps: AppDeps) {
         if (rec.used_by !== null && requestedKey(url, contentType, body) !== rec.used_by) {
           return barkError(410, "invite already used. Ask for a new invite link");
         }
-        inviteTags = rec.tags;
-        inviteCrypto = rec.crypto;
         inviteUnused = rec.used_by === null;
+        // 招待のタグは招待を使う登録でだけ付ける (再登録で人が直したタグを戻さない)。ブラウザの情報は再登録でも写し続ける
+        if (inviteUnused) inviteTags = rec.tags;
+        inviteCrypto = rec.crypto;
+        inviteBrowser = rec.browser;
       }
     }
+
+    // whois は bark-server の応答を待つ間に引いておく
+    const ip = isRegister ? forwardedIp(req.headers.get("x-forwarded-for")) : undefined;
+    const tailnet: Promise<TailnetInfo> = ip === undefined ? Promise.resolve({}) : whois(ip);
 
     return withUpstream(async () => {
       const up = await bark.forward(req.method, `${path}${url.search}`, contentType, body);
       if (isRegister && up.status === 200) {
         const reg = parseJsonWith(RegisterResponseSchema, up.body);
-        if (reg.ok && reg.value.code === 200) await recordRegistration(reg.value.data.device_key, reg.value.data.device_token, inviteTags, inviteCrypto, invite, inviteUnused);
+        if (reg.ok && reg.value.code === 200) {
+          const seen = { headers: req.headers, tailnet: await tailnet, browser: inviteBrowser };
+          await recordRegistration(reg.value.data.device_key, reg.value.data.device_token, inviteTags, inviteCrypto, seen, invite, inviteUnused);
+        }
       }
       return upstreamResponse(up);
     });
@@ -144,11 +167,13 @@ export function createApp(deps: AppDeps) {
     deviceToken: string,
     tags: Tags,
     crypto: CryptoKeyOnly | null,
+    seen: { headers: Headers; tailnet: TailnetInfo; browser: InviteBrowser | null },
     invite: string | null,
     inviteUnused: boolean,
   ) {
     const at = now();
-    await store.devices.update((cur) => ({ next: upsertRegistration(cur, { deviceId, deviceToken, tags, crypto, now: at }).devices, result: null }));
+    const info = observeRegistration({ ...seen, now: at });
+    await store.devices.update((cur) => ({ next: upsertRegistration(cur, { deviceId, deviceToken, tags, crypto, info, autoTags: autoTags(info), now: at }).devices, result: null }));
     if (invite !== null && inviteUnused) {
       await store.invites.update((cur) => {
         const rec = cur[invite];
@@ -277,7 +302,7 @@ export function createApp(deps: AppDeps) {
     const createdAt = now();
     const crypto: CryptoKeyOnly | null = r.value.encrypt ? { key: newCryptoKey() } : null;
     await store.invites.update((cur) => ({
-      next: { ...cur, [invite]: { tags: r.value.tags, created_at: createdAt, used_by: null, crypto } },
+      next: { ...cur, [invite]: { tags: r.value.tags, created_at: createdAt, used_by: null, crypto, browser: null } },
       result: null,
     }));
     return json(201, { invite, ...inviteUrls(serverUrl, invite), crypto });
@@ -289,9 +314,17 @@ export function createApp(deps: AppDeps) {
     return new Response(svg, { headers: { "content-type": "image/svg+xml" } });
   }
 
-  async function addPage(invite: string): Promise<Response> {
+  async function addPage(req: Request, invite: string): Promise<Response> {
     const rec = (await store.invites.read())[invite];
     if (rec === undefined) return html(404, notFoundPageHtml("この招待リンクは登録簿にない。管理画面で招待を作り直す。"));
+    // 開いたブラウザを招待に残し、この招待で登録した端末の info に写す (未使用のうちだけ。最後に開いたものが残る)
+    if (rec.used_by === null) {
+      const browser = browserFromHeaders(req.headers);
+      await store.invites.update((cur) => {
+        const r = cur[invite];
+        return r === undefined || r.used_by !== null ? { result: null } : { next: { ...cur, [invite]: { ...r, browser } }, result: null };
+      });
+    }
     return html(200, addPageHtml({ addserverUrl: inviteUrls(serverUrl, invite).addserver_url, tags: rec.tags, used: rec.used_by !== null, cryptoKey: rec.crypto?.key ?? null }));
   }
 
@@ -305,7 +338,7 @@ export function createApp(deps: AppDeps) {
     [`${ADMIN}/`]: new Response(Bun.file(join(PUBLIC_DIR, "index.html"))),
     [`${ADMIN}/devices/:id`]: new Response(Bun.file(join(PUBLIC_DIR, "device.html"))),
     ...assets,
-    [`${ADMIN}/add/:invite`]: { GET: (req: Bun.BunRequest<"/bark-admin/add/:invite">) => addPage(req.params.invite) },
+    [`${ADMIN}/add/:invite`]: { GET: (req: Bun.BunRequest<"/bark-admin/add/:invite">) => addPage(req, req.params.invite) },
     [`${ADMIN}/push`]: { POST: adminPush },
     [`${ADMIN}/api/schema`]: { GET: () => json(200, { fields: pushParamFields }) },
     [`${ADMIN}/api/devices`]: { GET: listDevices },

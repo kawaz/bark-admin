@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { archiveDevice, finishCryptoConfirm, matchTags, patchDevice, resolveTargets, selectDevices, startCryptoConfirm, upsertRegistration } from "../src/registry.ts";
+import { archiveDevice, finishCryptoConfirm, listItem, matchTags, mergeTags, patchDevice, resolveTargets, selectDevices, startCryptoConfirm, upsertRegistration, view } from "../src/registry.ts";
 import type { Devices } from "../src/schema/registry.ts";
 
 const devices: Devices = {
@@ -29,7 +29,7 @@ describe("selectDevices", () => {
   });
   test("view carries device_id", () => {
     expect(selectDevices(devices, { name: "iphone" }, false)).toEqual([
-      { device_id: "A", device_token: "ta", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone", family: "kawazu" }, crypto: null },
+      { device_id: "A", device_token: "ta", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone", family: "kawazu" }, crypto: null, info: {} },
     ]);
   });
 });
@@ -44,15 +44,39 @@ describe("resolveTargets", () => {
 });
 
 describe("upsertRegistration", () => {
-  test("new device gets tags and registered_at", () => {
-    const r = upsertRegistration(devices, { deviceId: "E", deviceToken: "te", tags: { owner: "x" }, crypto: null, now: "t2" });
+  const info = { ts_hostname: "zunPhone", last_register_at: "t2" };
+  test("new device gets tags, registered_at and info", () => {
+    const r = upsertRegistration(devices, { deviceId: "E", deviceToken: "te", tags: { owner: "x" }, crypto: null, info, autoTags: { name: "zunphone" }, now: "t2" });
     expect(r.created).toBe(true);
-    expect(r.devices["E"]).toEqual({ device_token: "te", registered_at: "t2", archived_at: null, tags: { owner: "x" }, crypto: null });
+    expect(r.devices["E"]).toEqual({ device_token: "te", registered_at: "t2", archived_at: null, tags: { name: "zunphone", owner: "x" }, crypto: null, info });
   });
-  test("existing device only updates the token", () => {
-    const r = upsertRegistration(devices, { deviceId: "D", deviceToken: "new", tags: { owner: "x" }, crypto: null, now: "t2" });
+  test("existing device updates the token, replaces info and fills only missing tags", () => {
+    const r = upsertRegistration(devices, { deviceId: "D", deviceToken: "new", tags: {}, crypto: null, info, autoTags: { name: "zunphone", os: "ios" }, now: "t2" });
     expect(r.created).toBe(false);
-    expect(r.devices["D"]).toEqual({ device_token: "new", registered_at: "t0", archived_at: "t1", tags: { owner: "kawaz", name: "old" }, crypto: null });
+    expect(r.devices["D"]).toEqual({ device_token: "new", registered_at: "t0", archived_at: "t1", tags: { owner: "kawaz", name: "old", os: "ios" }, crypto: null, info });
+    const again = upsertRegistration(r.devices, { deviceId: "D", deviceToken: "new", tags: {}, crypto: null, info: { last_register_at: "t3" }, autoTags: {}, now: "t3" });
+    expect(again.devices["D"]?.info).toEqual({ last_register_at: "t3" });
+  });
+});
+
+describe("mergeTags", () => {
+  test("invite > existing > auto", () => {
+    expect(mergeTags({ name: "inv" }, { name: "cur", owner: "kawaz" }, { name: "auto", os: "ios", owner: "auto" })).toEqual({ name: "inv", owner: "kawaz", os: "ios" });
+    expect(mergeTags({}, { name: "cur" }, { name: "auto", lang: "ja" })).toEqual({ name: "cur", lang: "ja" });
+    expect(mergeTags({}, {}, { name: "auto" })).toEqual({ name: "auto" });
+    // 既存のキーの並びを保ち、自動タグは後ろに足す
+    expect(Object.keys(mergeTags({}, { owner: "kawaz", name: "cur" }, { name: "auto", os: "ios" }))).toEqual(["owner", "name", "os"]);
+  });
+});
+
+describe("view / listItem", () => {
+  const d = devices["A"];
+  test("a device without info reads as info {}; the list keeps only ts_hostname and os_version", () => {
+    if (d === undefined) throw new Error("fixture A");
+    expect(view("A", d).info).toEqual({});
+    const full = { ...d, info: { ts_hostname: "zunPhone", os_version: "iOS 26.7.1", user_agent: "Bark/1.6.4", ts_user: "u@example" } };
+    expect(view("A", full).info).toEqual(full.info);
+    expect(listItem(view("A", full)).info).toEqual({ ts_hostname: "zunPhone", os_version: "iOS 26.7.1" });
   });
 });
 

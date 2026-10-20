@@ -5,6 +5,7 @@ import { join } from "node:path";
 import * as v from "valibot";
 import { createApp } from "../src/app.ts";
 import { BarkServer } from "../src/bark-server.ts";
+import type { TailnetInfo } from "../src/device-info.ts";
 import { parseJsonWith } from "../src/parse.ts";
 import { openStore, type Store } from "../src/store.ts";
 import { nodeDecrypt } from "./node-aes-gcm.ts";
@@ -52,6 +53,9 @@ let dir: string;
 let store: Store;
 let server: ReturnType<typeof Bun.serve>;
 let base: string;
+// 偽 tailscale whois: 引かれた IP を記録し、whoisResult を返す
+const whoisCalls: string[] = [];
+let whoisResult: TailnetInfo = {};
 
 afterAll(() => {
   fakeBark.stop(true);
@@ -59,6 +63,8 @@ afterAll(() => {
 
 beforeEach(async () => {
   received.length = 0;
+  whoisCalls.length = 0;
+  whoisResult = {};
   dir = await mkdtemp(join(tmpdir(), "bark-admin-app-"));
   store = openStore(join(dir, "devices.json"));
   await store.devices.update(() => ({
@@ -70,7 +76,13 @@ beforeEach(async () => {
     },
     result: null,
   }));
-  const app = createApp({ serverUrl: "https://bark.example", store, bark: new BarkServer(fakeBark.url.origin), now: () => "NOW" });
+  const app = createApp({ serverUrl: "https://bark.example", store, bark: new BarkServer(fakeBark.url.origin),
+    now: () => "NOW",
+    whois: async (ip) => {
+      whoisCalls.push(ip);
+      return whoisResult;
+    },
+  });
   server = Bun.serve({ port: 0, routes: app.routes, fetch: app.fetch });
   base = server.url.origin;
 });
@@ -247,7 +259,7 @@ describe("devices API", () => {
     expect(nonce).not.toBe("");
     const lines = (await (await fetch(`${base}/bark-admin/api/devices?name=iphone`)).text()).split("\n").filter((l) => l !== "");
     expect(lines.map((l) => JSON.parse(l))).toEqual([
-      { device_id: "A", device_token: "ta", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, crypto: { confirmed_at: null } },
+      { device_id: "A", device_token: "ta", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, crypto: { confirmed_at: null }, info: {} },
     ]);
     expect(lines.join("")).not.toContain(KEY_A);
     const detail = await (await fetch(`${base}/bark-admin/api/devices/A`)).text();
@@ -386,7 +398,7 @@ describe("register via invite", () => {
     const res = await fetch(`${base}/r/${inv.invite}/register?devicetoken=tok&key=`);
     expect(res.status).toBe(200);
     expect(received.at(-1)).toMatchObject({ method: "GET", path: "/register", search: "?devicetoken=tok&key=" });
-    expect((await store.devices.read())["NEWKEY"]).toEqual({ device_token: "tok", registered_at: "NOW", archived_at: null, tags: { owner: "kawaz", name: "new" }, crypto: null });
+    expect((await store.devices.read())["NEWKEY"]).toEqual({ device_token: "tok", registered_at: "NOW", archived_at: null, tags: { owner: "kawaz", name: "new" }, crypto: null, info: { last_register_at: "NOW", user_agent: expect.any(String) } });
     expect((await store.invites.read())[inv.invite]?.used_by).toBe("NEWKEY");
 
     // 使った本人の再登録 (アプリ起動時) は通り、token だけ更新される
@@ -410,13 +422,74 @@ describe("register via invite", () => {
     await fetch(`${base}/register?devicetoken=t1&key=`);
     expect((await store.devices.read())["NEWKEY"]?.tags).toEqual({});
     await fetch(`${base}/register?devicetoken=t9&key=A`);
-    expect((await store.devices.read())["A"]).toEqual({ device_token: "t9", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, crypto: null });
+    expect((await store.devices.read())["A"]).toEqual({ device_token: "t9", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, crypto: null, info: { last_register_at: "NOW", user_agent: expect.any(String) } });
   });
 
   test("bark-server errors are passed through without touching the registry", async () => {
     const res = await fetch(`${base}/register?devicetoken=&key=`);
     expect(res.status).toBe(400);
     expect(Object.keys(await store.devices.read())).toEqual(["A", "B", "C", "D"]);
+  });
+});
+
+describe("device info and auto tags on register", () => {
+  const BARK_UA = "Bark/1.6.4 (me.fin.bark; build:8; iOS 26.7.1) Alamofire/5.10.2";
+  const barkHeaders = { "user-agent": BARK_UA, "accept-language": "ja;q=1.0, en;q=0.9", "x-forwarded-for": "100.104.30.107" };
+  const tailnet = { ts_name: "zunphone.tail0000.ts.net", ts_hostname: "zunPhone", ts_os: "iOS", ts_user: "user@example.com", ts_ip: "100.104.30.107" };
+  const observed = { bark_version: "1.6.4", bark_build: "8", os_version: "iOS 26.7.1", user_agent: BARK_UA, lang: "ja;q=1.0, en;q=0.9", ...tailnet, last_register_at: "NOW" };
+
+  test("plain /register records info and fills only missing tags with auto tags", async () => {
+    whoisResult = tailnet;
+    expect((await fetch(`${base}/register?devicetoken=t9&key=A`, { headers: barkHeaders })).status).toBe(200);
+    expect(whoisCalls).toEqual(["100.104.30.107"]);
+    const a = (await store.devices.read())["A"];
+    expect(a?.info).toEqual(observed);
+    // 既存の name=iphone は残り、無いキーだけ足される
+    expect(a?.tags).toEqual({ owner: "kawaz", name: "iphone", os: "ios", lang: "ja", ts_user: "user@example.com" });
+    const detail = await (await fetch(`${base}/bark-admin/api/devices/A`)).json();
+    expect(detail).toMatchObject({ info: observed });
+    const [line] = (await (await fetch(`${base}/bark-admin/api/devices?name=iphone`)).text()).split("\n");
+    expect(JSON.parse(line ?? "")).toMatchObject({ device_id: "A", info: { ts_hostname: "zunPhone", os_version: "iOS 26.7.1" } });
+    expect(line).not.toContain(BARK_UA);
+  });
+
+  test("no X-Forwarded-For: no whois, os from the UA; a failed whois still registers", async () => {
+    await fetch(`${base}/register?devicetoken=t1&key=`, { headers: { "user-agent": BARK_UA } });
+    expect(whoisCalls).toEqual([]);
+    expect((await store.devices.read())["NEWKEY"]?.tags).toEqual({ os: "ios" });
+    // whois が何も返さなくても登録は通る
+    expect((await fetch(`${base}/register?devicetoken=t2&key=`, { headers: barkHeaders })).status).toBe(200);
+    expect((await store.devices.read())["NEWKEY"]?.info).toMatchObject({ os_version: "iOS 26.7.1", last_register_at: "NOW" });
+  });
+
+  test("/r/:invite/register: invite tags win over auto tags; the browser that opened the invite page goes to info", async () => {
+    whoisResult = tailnet;
+    const res = await post("/bark-admin/api/invites", { tags: { owner: "kawaz", name: "ipad" } });
+    const inv = v.parse(v.object({ invite: v.string() }), await res.json());
+    const safari = "Mozilla/5.0 (iPhone; CPU iPhone OS 26_7_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1";
+    await fetch(`${base}/bark-admin/add/${inv.invite}`, { headers: { "user-agent": safari, "sec-ch-ua-mobile": "?1" } });
+    expect((await store.invites.read())[inv.invite]?.browser).toEqual({ user_agent: safari, hints: { "sec-ch-ua-mobile": "?1" } });
+
+    await fetch(`${base}/r/${inv.invite}/register?devicetoken=tok&key=`, { headers: barkHeaders });
+    const d = (await store.devices.read())["NEWKEY"];
+    expect(d?.tags).toEqual({ owner: "kawaz", name: "ipad", os: "ios", lang: "ja", ts_user: "user@example.com" });
+    expect(d?.info).toEqual({ ...observed, browser_user_agent: safari, browser_hints: { "sec-ch-ua-mobile": "?1" } });
+
+    // 使用済みの招待ページを開いても browser は変わらない。再登録で人が直したタグは招待のタグに戻らない
+    await fetch(`${base}/bark-admin/add/${inv.invite}`, { headers: { "user-agent": "other" } });
+    expect((await store.invites.read())[inv.invite]?.browser?.user_agent).toBe(safari);
+    await post("/bark-admin/api/devices/NEWKEY", { tags: { owner: "kawaz", name: "renamed" } }, "PATCH");
+    await fetch(`${base}/r/${inv.invite}/register?devicetoken=tok2&key=NEWKEY`, { headers: barkHeaders });
+    const again = (await store.devices.read())["NEWKEY"];
+    expect(again?.tags).toEqual({ owner: "kawaz", name: "renamed", os: "ios", lang: "ja", ts_user: "user@example.com" });
+    expect(again?.info?.browser_user_agent).toBe(safari);
+  });
+
+  test("PATCH cannot edit info", async () => {
+    const res = await post("/bark-admin/api/devices/A", { info: { ts_hostname: "x" } }, "PATCH");
+    expect(res.status).toBe(400);
+    expect((await post("/bark-admin/api/devices/A", { tags: { name: "n" }, info: {} }, "PATCH")).status).toBe(400);
+    expect((await store.devices.read())["A"]?.info).toBeUndefined();
   });
 });
 
