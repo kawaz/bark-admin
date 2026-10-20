@@ -29,7 +29,7 @@ Web UI (人) ──────┘
 // devices.json: device_id (= bark の device key) をキーにした map
 {
   "DuMUEQLh3pDAagNNFVRraf": {
-    "device_token": "0cc6…97bc",            // bark-server の応答の写し。送信には使わない (bark-server が自前の bbolt で引く)
+    "device_token": "0cc6…97bc",            // bark-server の応答の写し。送信には使わない (bark-server が自前の bbolt で引く)。API にも画面にも出さない
     "registered_at": "2026-10-20T10:02:28+09:00",
     "archived_at": null,                     // 退役は削除せずこれを立てて一覧・送信対象から外す
     "tags": { "owner": "kawaz", "name": "iphone", "family": "kawazu" },  // 平坦な string map、キーは任意
@@ -128,8 +128,8 @@ bark-admin が中身を見るのは `/register` と `/r/:token/register` の 1 �
 | method path | 内容 |
 |---|---|
 | `POST /bark-admin/push` | bark-admin 独自の送信 API。body = bark V2 パラメータ (`device_key` / `device_keys` / `ciphertext` / `iv` を除く) + `device: {k: v, …}` (全キーの AND。値は `v` で完全一致、両端が `*` の `*v*` で v を含む、`*` (と `**`) でそのキーがあれば当たる。`v*` / `*v` の `*` は文字そのもので完全一致。否定・エスケープは無い。省略時は active 全台)。該当 device を解決し、鍵を持つ device は 1 台ずつ暗号化して (暗号化の節)、残りは bark-server `/push` に `device_keys` で一括送信、`{sent: [{device_id, status, message?, encrypted}], skipped: n}` を返す (`sent` は宛先の並び順、`status` / `message` は bark-server の device ごとの結果、`encrypted` は暗号化して送ったか、`skipped` はタグに当たったが退役済みで外した台数)。該当 0 台なら bark-server を呼ばず 404。body は Content-Type に関わらず JSON として読み、スキーマに無いキー (`device_key` / `device_keys` / `ciphertext` / `iv` を含む) は 400 |
-| `GET /bark-admin/api/devices?k=v&…&archived=1` | `k=v` は `/bark-admin/push` の `device` と同じ解釈 (完全一致 / `*v*` / `*`)。jsonl (1 行 1 device、`device_id` 付き、`crypto` は `{confirmed_at}` か null で鍵を含まない、`delivery` は `{confirmed_at}`、`info` は `{ts_hostname, os_version}` だけ)。既定は active のみ |
-| `GET /bark-admin/api/devices/:id` | 1 件 JSON (`crypto` は `{key, confirmed_at}` か null、`delivery` は `{confirmed_at}`、`info` は全項目で、無い device は `{}`) |
+| `GET /bark-admin/api/devices?k=v&…&archived=1` | `k=v` は `/bark-admin/push` の `device` と同じ解釈 (完全一致 / `*v*` / `*`)。jsonl (1 行 1 device、`device_token` は含まない、`device_id` 付き、`crypto` は `{confirmed_at}` か null で鍵を含まない、`delivery` は `{confirmed_at}`、`info` は `{ts_hostname, os_version}` だけ)。既定は active のみ |
+| `GET /bark-admin/api/devices/:id` | 1 件 JSON (`device_token` は含まない、`crypto` は `{key, confirmed_at}` か null、`delivery` は `{confirmed_at}`、`info` は全項目で、無い device は `{}`) |
 | `PATCH /bark-admin/api/devices/:id` | `{tags}` でタグ置換、`{crypto: {key}}` / `{crypto: null}` で鍵の設定 / 解除。`info` は観察値なので受け付けない (400) |
 | `POST /bark-admin/api/devices/:id/crypto` | 新しい鍵を作って保存し (未確認に戻る)、鍵入りの device を返す (詳細画面の「暗号化キーを設定」「鍵を作り直す」) |
 | `POST /bark-admin/api/devices/:id/confirm/:kind` | 確認通知を送る (確認の節)。`kind` は `delivery` (平文) か `crypto` (暗号化、鍵が無ければ 409)、それ以外は 404。`{sent: {device_id, status, message?, encrypted}}`、bark-server が受けなければ 502 |
@@ -142,7 +142,7 @@ bark-admin が中身を見るのは `/register` と `/r/:token/register` の 1 �
 | `DELETE /bark-admin/api/invites/:invite` | 招待とその未使用のトークンを消す。204、無ければ 404 |
 | `GET /bark-admin/api/invites/:invite/qr.svg` | `add_url` の QR (SVG)。TOP のデバイス追加で表示する |
 | `GET /bark-admin/api/schema` | 通知パラメータのスキーマ (`{fields: [{name, kind, group, description, …}]}`)。TOP のテストフォームはこれから描く |
-| `GET /bark-admin/` `/bark-admin/devices/:id` `/bark-admin/add/:invite` | 画面 (下記)。静的ファイルは `/bark-admin/assets/`。`/bark-admin/add/:invite` は開くたびに登録トークンを発行する (`cache-control: no-store`) |
+| `GET /bark-admin/` `/bark-admin/devices/:id` `/bark-admin/add/:invite` | 画面 (下記)。静的ファイルは `/bark-admin/assets/`。HTML と静的ファイルは `Cache-Control: no-cache` + ETag (内容の hash、一致すれば 304) で配り、HTML と JS の中の asset 参照には起動時に計算した内容の hash で `?v=<先頭 8>` を付ける (古い JS / CSS が残って HTML と版がずれないように)。`/bark-admin/add/:invite` は開くたびに登録トークンを発行する (`cache-control: no-store`) |
 
 パラメータのスキーマ (title / subtitle / body / markdown / sound / icon / image / group / level / volume / badge / call / url / copy / autoCopy / isArchive / ttl / action / id / delete) は `src/schema/push-params.ts` の 1 か所で定義し、`/bark-admin/push` の検証と TOP のフォーム生成の両方に使う。出典は bark-server `docs/API_V2.md` と Bark `docs/en-us/params.md`。暗号化の `ciphertext` / `iv` は bark-admin が作るので受け付けない (root の互換面は従来どおり透過する)。型は bark-server の扱いに合わせる: `badge` / `ttl` は JSON の整数、`volume` は `"0"`〜`"10"` の文字列、`call` / `autoCopy` / `delete` は `"1"`、`isArchive` は `"1"` / `"0"`、`delete` は `id` 必須。
 
@@ -157,9 +157,10 @@ bark-admin が中身を見るのは `/register` と `/r/:token/register` の 1 �
 ## 画面
 
 - `/bark-admin/` TOP: 通知テストフォーム (スキーマから生成、送信先はフィルタに当たる全台) / フィルタ入力 (`k=v` 改行区切り AND、値は `device` と同じ解釈) / デバイス一覧 (device_id, owner, name とその下に `info.os_version`, 暗号化の有無と未確認, 主要 4 tag + 残り n 件, registered_at。device_id で詳細へ) / デバイス追加 (招待の作成: タグ・メモ・「暗号化する」(既定 on) → QR、招待の一覧: タグ・メモ・暗号化・登録数、QR を再表示 / 削除)
-- `/bark-admin/devices/:id`: 見出し (name、その直下に device_id を大きめの固定幅で全文、owner) の下を 3 節に分ける。「端末」(登録簿の固有フィールド: device_id / registered_at / device_token / 受信確認 (未確認 / 確認済み <日時>) / 暗号化 (無効 / 有効・未確認 / 有効・確認済み <日時>) の定義リスト、その下に受信確認の操作 (「受信確認を送る」) と暗号化の操作 (「暗号化キーを設定」で鍵を作ってコピー、再コピー、「暗号化の確認を送る」、作り直す、無効にする))、「タグ」(今のタグのチップと編集欄)、「端末情報」(`info` の定義リスト、無い項目は出さない、編集できない)。最後に退役ボタン
+- `/bark-admin/devices/:id`: 見出し (name、その直下に device_id を大きめの固定幅で全文、owner) の下を 3 節に分ける。「端末」(登録簿の固有フィールド: device_id / registered_at / 受信確認 (未確認 / 確認済み <日時>) / 暗号化 (無効 / 有効・未確認 / 有効・確認済み <日時>) の定義リスト、その下に受信確認の操作 (「受信確認を送る」) と暗号化の操作 (「暗号化キーを設定」で鍵を作ってコピー、再コピー、「暗号化の確認を送る」、作り直す、無効にする))、「タグ」(今のタグのチップと編集欄)、「端末情報」(`info` の定義リスト、無い項目は出さない、編集できない)。最後に退役ボタン
 - `/bark-admin/add/:invite`: 招待の案内ページ。開くたびにその 1 台用の登録トークンを発行する。3 段のステップ (1. Bark にサーバーを追加 (1 回だけ押せる、Bark が開かなかった時だけ App Store の案内) → 2. 受信確認 → 3. 暗号化 (鍵付きの招待だけ、伏せ字の鍵をコピーして Bark を開く、暗号化の確認を送る))。済んだ段に ✓、今の段を強調、先の段は薄く (登録の流れ参照)
 - ビルド無しの静的 HTML + fetch。モダン CSS / JS (Baseline) を使い古いハックで代替しない
+- 詳細ページの JS は要素が見つからない時 (HTML と JS の版ずれ) に黙って空欄にせず、`console.error` と画面の「古い版が表示されている。再読み込みする」(再読み込みボタン付き) を出して止まる
 
 ## 送信側の規約
 
