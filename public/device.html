@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bark-admin: デバイス</title>
+<link rel="stylesheet" href="/assets/style.css">
+<script type="module" src="/assets/device.js"></script>
+</head>
+<body>
+<header><h1><a href="/">bark-admin</a> / <span id="device-id"></span></h1></header>
+<main class="narrow">
+  <p id="error" class="notice" hidden></p>
+  <section id="detail" hidden>
+    <p id="archived-badge" class="notice" hidden>退役済み (<span id="archived-at"></span>)。送信対象と一覧から外れています。</p>
+    <dl>
+      <dt>registered_at</dt><dd id="registered-at"></dd>
+      <dt>device_token</dt><dd><code id="device-token"></code></dd>
+    </dl>
+    <form id="tags-form">
+      <h2>タグ</h2>
+      <p class="hint">1 行に 1 つ <code>key=value</code>。保存すると全部置き換わる。</p>
+      <textarea id="tags" rows="6"></textarea>
+      <button type="submit">タグを保存</button>
+      <span id="tags-status" class="hint"></span>
+    </form>
+    <h2>退役</h2>
+    <button id="archive" type="button" class="danger">退役させる</button>
+    <button id="restore" type="button" hidden>復帰させる</button>
+  </section>
+</main>
+</body>
+</html>

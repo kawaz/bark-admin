@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bark-admin</title>
+<link rel="stylesheet" href="/assets/style.css">
+<script type="module" src="/assets/index.js"></script>
+</head>
+<body>
+<header><h1>bark-admin</h1></header>
+<main>
+  <section id="filter-section">
+    <h2>フィルタ</h2>
+    <p class="hint">1 行に 1 つ <code>key=value</code>。全部に一致する端末が対象 (空なら全台)。一覧とテスト送信の両方に効く。</p>
+    <textarea id="filter" rows="3" placeholder="owner=kawaz"></textarea>
+    <label class="inline"><input type="checkbox" id="show-archived"> 退役済みも表示</label>
+  </section>
+
+  <section id="devices-section">
+    <h2>デバイス <span id="device-count" class="count"></span></h2>
+    <table id="devices">
+      <thead><tr><th>device_id</th><th>owner</th><th>name</th><th>tags</th><th>registered_at</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p id="devices-empty" class="hint" hidden>該当するデバイスはありません。フィルタを緩めるか、下の「デバイス追加」で招待を作ってください。</p>
+  </section>
+
+  <section id="push-section">
+    <h2>通知テスト</h2>
+    <form id="push-form">
+      <div id="push-fields"></div>
+      <button type="submit">フィルタに当たる全台へ送信</button>
+    </form>
+    <pre id="push-result" hidden></pre>
+  </section>
+
+  <section id="invite-section">
+    <h2>デバイス追加</h2>
+    <form id="invite-form">
+      <p class="hint">新しい端末に付けるタグを 1 行に 1 つ <code>key=value</code> で。</p>
+      <textarea id="invite-tags" rows="3" placeholder="owner=kawaz&#10;name=ipad"></textarea>
+      <button type="submit">招待を作る</button>
+    </form>
+    <div id="invite-result" hidden>
+      <img id="invite-qr" alt="招待 QR コード" width="240" height="240">
+      <p>iPhone / iPad のカメラで読み取るか、端末で次の URL を開く:</p>
+      <p><a id="invite-add-url"></a></p>
+      <p class="hint">Bark が入った端末で直接追加: <a id="invite-addserver-url">Bark で開く</a></p>
+    </div>
+  </section>
+</main>
+</body>
+</html>

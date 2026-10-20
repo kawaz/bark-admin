@@ -1,0 +1,203 @@
+:root {
+  color-scheme: light dark;
+  --fg: light-dark(#1d1d1f, #f2f2f7);
+  --muted: light-dark(#6e6e73, #98989d);
+  --bg: light-dark(#ffffff, #1c1c1e);
+  --panel: light-dark(#f5f5f7, #2c2c2e);
+  --line: light-dark(#d2d2d7, #3a3a3c);
+  --accent: light-dark(#0a66d6, #4c9bff);
+  --danger: light-dark(#c62828, #ff6b6b);
+  font-family: system-ui, sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+body {
+  margin: 0;
+}
+
+/* display を指定した要素 (button 等) でも hidden 属性で消えるようにする */
+[hidden] {
+  display: none !important;
+}
+
+header {
+  padding: 0.75rem 1.5rem;
+  border-block-end: 1px solid var(--line);
+  h1 {
+    margin: 0;
+    font-size: 1.25rem;
+  }
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+}
+
+main {
+  display: grid;
+  gap: 2rem;
+  padding: 1.5rem;
+  max-inline-size: 72rem;
+  &.narrow {
+    max-inline-size: 40rem;
+  }
+}
+
+section > h2,
+form > h2 {
+  margin-block: 0 0.5rem;
+  font-size: 1.1rem;
+}
+
+.count,
+.hint,
+small {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: normal;
+}
+
+textarea,
+input[type="text"],
+input[type="url"],
+input[type="number"],
+select {
+  box-sizing: border-box;
+  inline-size: 100%;
+  padding: 0.4rem 0.5rem;
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+textarea {
+  font-family: ui-monospace, monospace;
+  field-sizing: content;
+  min-block-size: 3lh;
+}
+
+button,
+a.button {
+  display: inline-block;
+  margin-block-start: 0.5rem;
+  padding: 0.5rem 1rem;
+  font: inherit;
+  color: #fff;
+  background: var(--accent);
+  border: 0;
+  border-radius: 6px;
+  text-decoration: none;
+  cursor: pointer;
+  &.danger {
+    background: var(--danger);
+  }
+}
+
+label.inline {
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
+  margin-block-start: 0.25rem;
+}
+
+table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  th,
+  td {
+    padding: 0.4rem 0.5rem;
+    text-align: start;
+    border-block-end: 1px solid var(--line);
+  }
+  td:first-child {
+    font-family: ui-monospace, monospace;
+  }
+  tr.archived {
+    color: var(--muted);
+    text-decoration: line-through;
+  }
+}
+
+.chip {
+  display: inline-block;
+  margin-inline-end: 0.25rem;
+  padding: 0 0.4rem;
+  font-size: 0.85rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.more {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+fieldset {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 0.75rem 1rem;
+  margin: 0 0 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+label.field {
+  display: grid;
+  gap: 0.2rem;
+  align-content: start;
+  > span {
+    font-family: ui-monospace, monospace;
+    font-size: 0.9rem;
+  }
+  &.textarea {
+    grid-column: 1 / -1;
+  }
+  &.flag {
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    > input {
+      justify-self: start;
+    }
+    > small {
+      grid-column: 1 / -1;
+    }
+  }
+}
+
+pre {
+  padding: 0.75rem;
+  overflow-x: auto;
+  background: var(--panel);
+  border-radius: 6px;
+}
+
+.notice {
+  padding: 0.75rem 1rem;
+  background: var(--panel);
+  border-inline-start: 4px solid var(--danger);
+  border-radius: 4px;
+}
+
+#invite-qr {
+  display: block;
+  background: #fff;
+}
+
+dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+  dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
+ol li {
+  margin-block: 0.75rem;
+}
