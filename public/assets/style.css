@@ -635,6 +635,50 @@ dialog {
   }
 }
 
+.invite-home {
+  display: grid;
+  gap: 1.75rem;
+}
+
+/* 招待の一覧。行は罫線で区切り、QR / 削除を右に置く (狭い時は下に回る) */
+.invite-list {
+  display: grid;
+  gap: 0.5rem;
+  padding-block-start: 1.25rem;
+  border-block-start: 1px solid var(--line);
+  h3 {
+    font-size: 1rem;
+  }
+  > ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+}
+
+.invite-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding-block: 0.75rem;
+  border-block-end: 1px solid var(--line);
+  .what {
+    display: grid;
+    gap: 0.35rem;
+    flex: 1 1 12rem;
+    min-inline-size: 0;
+  }
+  .note {
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  .actions {
+    gap: 0.5rem;
+  }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   dialog[open] {
     transition:

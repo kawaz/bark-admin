@@ -54,22 +54,32 @@
     <h2 id="invite-heading">デバイスを追加</h2>
     <button type="button" class="secondary" commandfor="invite-dialog" command="close">閉じる</button>
   </div>
-  <form id="invite-form">
-    <label for="invite-tags">新しい端末に付けるタグ</label>
-    <textarea id="invite-tags" class="kv" rows="3" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="owner=kawaz&#10;name=ipad" aria-describedby="invite-hint invite-error" autofocus></textarea>
-    <p id="invite-hint" class="hint">1 行に 1 つ <code>key=value</code>。あとから詳細画面で直せる</p>
-    <label class="check"><input type="checkbox" id="invite-encrypt" checked> 暗号化する (鍵は招待ページに出る)</label>
-    <p id="invite-error" class="error" role="alert" hidden></p>
-    <div><button type="submit">招待を作る</button></div>
-  </form>
+  <div id="invite-home" class="invite-home">
+    <form id="invite-form">
+      <label for="invite-tags">新しい端末に付けるタグ</label>
+      <textarea id="invite-tags" class="kv" rows="3" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="owner=kawaz&#10;name=ipad" aria-describedby="invite-hint invite-error" autofocus></textarea>
+      <p id="invite-hint" class="hint">1 行に 1 つ <code>key=value</code>。あとから詳細画面で直せる</p>
+      <label for="invite-note">メモ</label>
+      <input id="invite-note" type="text" autocomplete="off" placeholder="家族の iPad 用">
+      <label class="check"><input type="checkbox" id="invite-encrypt" checked> 暗号化する (端末ごとの鍵が招待ページに出る)</label>
+      <p id="invite-error" class="error" role="alert" hidden></p>
+      <div><button type="submit">招待を作る</button></div>
+    </form>
+    <section class="invite-list" aria-labelledby="invite-list-heading">
+      <h3 id="invite-list-heading">招待</h3>
+      <p class="hint">招待は削除するまで何度でも使える。QR を読んで開くたびに、その 1 台用の登録リンク (24 時間) が出る</p>
+      <ul id="invites"></ul>
+      <p id="invites-empty" class="hint" hidden>まだ招待がない</p>
+    </section>
+  </div>
   <div id="invite-result" class="invite-result" hidden>
     <img id="invite-qr" alt="招待ページの QR コード" width="240" height="240">
     <p>新しい端末のカメラで読み取る。開いたページで「Bark で開く」を押すと、このタグで登録される。</p>
     <ul id="invite-tags-shown" class="tags"></ul>
-    <p id="invite-crypto-note" class="hint" hidden>暗号化する端末。招待ページに出る鍵を Bark の「推送加密 / Push Encryption」に貼るまで、通知は読めない</p>
+    <p id="invite-note-shown" class="hint" hidden></p>
+    <p id="invite-crypto-note" class="hint" hidden>暗号化する招待。招待ページに出る端末ごとの鍵を Bark の「推送加密 / Push Encryption」に貼るまで、通知は読めない</p>
     <p class="url"><a id="invite-add-url"></a></p>
-    <p class="hint">この端末に Bark が入っているなら <a id="invite-addserver-url">Bark で開く</a></p>
-    <button type="button" id="invite-again" class="secondary">別の招待を作る</button>
+    <button type="button" id="invite-back" class="secondary">招待の一覧に戻る</button>
   </div>
 </dialog>
 </body>

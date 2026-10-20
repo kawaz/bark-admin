@@ -236,13 +236,75 @@ function countFilledMore(form, fields) {
 function setupInvite() {
   const dialog = $("#invite-dialog");
   const form = $("#invite-form");
+  const home = $("#invite-home");
   const result = $("#invite-result");
   const error = $("#invite-error");
 
-  function showForm() {
-    form.hidden = false;
+  function showHome() {
+    home.hidden = false;
     result.hidden = true;
     error.hidden = true;
+  }
+
+  // 招待の QR を出す (作った直後も、一覧から開き直した時も同じ)
+  function showQr(inv) {
+    $("#invite-qr").src = `/bark-admin/api/invites/${encodeURIComponent(inv.invite)}/qr.svg`;
+    $("#invite-add-url").href = inv.add_url;
+    $("#invite-add-url").textContent = inv.add_url;
+    $("#invite-crypto-note").hidden = !inv.encrypt;
+    $("#invite-note-shown").textContent = inv.note ?? "";
+    $("#invite-note-shown").hidden = inv.note === undefined;
+    $("#invite-tags-shown").replaceChildren(...Object.entries(inv.tags).map(([k, v]) => el("li", { className: "tag", textContent: `${k}=${v}` })));
+    home.hidden = true;
+    result.hidden = false;
+  }
+
+  function inviteItem(inv) {
+    const tags = Object.entries(inv.tags);
+    const facts = [inv.encrypt ? "暗号化" : "", inv.registered > 0 ? `${inv.registered} 台登録` : "未登録", `作成 ${formatAt(inv.created_at)}`].filter(Boolean).join(" ・ ");
+    return el(
+      "li",
+      { className: "invite-item" },
+      el(
+        "div",
+        { className: "what" },
+        ...(inv.note === undefined ? [] : [el("span", { className: "note", textContent: inv.note })]),
+        el("ul", { className: "tags" }, ...(tags.length === 0 ? [el("li", { className: "hint", textContent: "タグなし" })] : tags.map(([k, v]) => el("li", { className: "tag", textContent: `${k}=${v}` })))),
+        el("span", { className: "hint", textContent: facts }),
+      ),
+      el(
+        "div",
+        { className: "actions" },
+        el("button", { type: "button", className: "secondary", textContent: "QR", onclick: () => showQr(inv) }),
+        el("button", { type: "button", className: "secondary danger", textContent: "削除", onclick: () => removeInvite(inv) }),
+      ),
+    );
+  }
+
+  async function loadInvites() {
+    const res = await fetch("/bark-admin/api/invites");
+    const empty = $("#invites-empty");
+    if (!res.ok) {
+      $("#invites").replaceChildren();
+      empty.textContent = `招待を読めなかった: ${await errorMessage(res)}`;
+      empty.hidden = false;
+      return;
+    }
+    const invites = parseJsonl(await res.text()).toSorted((a, b) => b.created_at.localeCompare(a.created_at));
+    $("#invites").replaceChildren(...invites.map(inviteItem));
+    empty.textContent = "まだ招待がない。上で作る";
+    empty.hidden = invites.length > 0;
+  }
+
+  async function removeInvite(inv) {
+    const label = inv.note ?? (Object.entries(inv.tags).map(([k, v]) => `${k}=${v}`).join(" ") || "タグなし");
+    if (!confirm(`招待 (${label}) を削除する? QR は使えなくなる。登録済みの端末はそのまま`)) return;
+    const res = await fetch(`/bark-admin/api/invites/${encodeURIComponent(inv.invite)}`, { method: "DELETE" });
+    if (!res.ok) {
+      error.textContent = `削除できなかった: ${await errorMessage(res)}`;
+      error.hidden = false;
+    }
+    await loadInvites();
   }
 
   form.addEventListener("submit", async (ev) => {
@@ -255,33 +317,31 @@ function setupInvite() {
       error.hidden = false;
       return;
     }
-    const res = await fetch("/bark-admin/api/invites", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tags, encrypt: $("#invite-encrypt").checked }) });
+    const note = $("#invite-note").value.trim();
+    const body = { tags, encrypt: $("#invite-encrypt").checked, ...(note === "" ? {} : { note }) };
+    const res = await fetch("/bark-admin/api/invites", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     if (!res.ok) {
       error.textContent = `招待を作れなかった: ${await errorMessage(res)}`;
       error.hidden = false;
       return;
     }
-    const inv = await res.json();
-    $("#invite-qr").src = `/bark-admin/api/invites/${encodeURIComponent(inv.invite)}/qr.svg`;
-    $("#invite-add-url").href = inv.add_url;
-    $("#invite-add-url").textContent = inv.add_url;
-    $("#invite-addserver-url").href = inv.addserver_url;
-    $("#invite-crypto-note").hidden = inv.crypto === null;
-    $("#invite-tags-shown").replaceChildren(...Object.entries(tags).map(([k, v]) => el("li", { className: "tag", textContent: `${k}=${v}` })));
-    form.hidden = true;
-    result.hidden = false;
+    form.reset();
+    showQr(await res.json());
+    loadInvites();
   });
 
-  $("#invite-again").addEventListener("click", () => {
-    showForm();
-    $("#invite-tags").focus();
+  $("#invite-back").addEventListener("click", () => {
+    showHome();
+    loadInvites();
   });
 
-  // 閉じたら次に開く時は入力から。招待を読んだ端末が増えているかもしれないので一覧も読み直す
+  // 閉じたら次に開く時は一覧から。招待を読んだ端末が増えているかもしれないので一覧も読み直す
   dialog.addEventListener("close", () => {
-    showForm();
+    showHome();
+    loadInvites();
     loadDevices();
   });
+  loadInvites();
 }
 
 async function main() {
