@@ -89,7 +89,7 @@ Bark アプリの「推送加密 / Push Encryption」に合わせ、鍵を持つ
 | `crypto` | 暗号化 (暗号化の節)。title「bark-admin 暗号化の確認」、body「この通知をタップすると暗号化の確認が完了する」+ 改行 + `device: <device_id>`。鍵が無ければ 409 | 復号できる (nonce は暗号文の中にしか無いので、復号できた端末だけが URL を開ける) | `crypto: {key, confirmed_at, pending_nonce}` |
 
 - `POST …/devices/:id/confirm/<kind>` で nonce を作って kind の `pending_nonce` に保存し、`url` = `<server_url>/bark-admin/api/devices/:id/confirm/<kind>/<nonce>` の確認通知を送る。送り直すと前の nonce は無効
-- タップで `GET …/confirm/<kind>/<nonce>` が開かれると、その kind の nonce が一致した時だけ `confirmed_at` を記録して nonce を消し「確認できた」の HTML を返す (同じ URL は 1 回だけ効く。別の kind の nonce では効かない)。ページには device_id (全文)、tags の name / owner、確認した kind と日時と、詳細 (`/bark-admin/devices/:id`) への「この端末の設定を開く」を出す。nonce が合わない (使用済み・古い) 時は 404 の HTML で、TOP (`/bark-admin/`) へのリンクを置く
+- タップで `GET …/confirm/<kind>/<nonce>` が開かれると、その kind の nonce が一致した時だけ `confirmed_at` を記録して nonce を消し「確認できた」の HTML を返す (同じ URL は 1 回だけ効く。別の kind の nonce では効かない)。ページは詳細の要約で、詳細と同じ 3 節 (「端末」= device_id / registered_at / 受信確認 / 暗号化、「タグ」= 全部をチップで、「端末情報」= os_version / ts_hostname があれば) に分け、今回確認した kind の行を太字にする。続けて 詳細 (`/bark-admin/devices/:id`) への「この端末の設定を開く」を出す。nonce が合わない (使用済み・古い) 時は 404 の HTML で、TOP (`/bark-admin/`) へのリンクを置く
 - Bark のサーバー一覧に同じ address が複数並んでも、各行の key が device_id なので、通知の body・確認できたページ・招待ページの「追加できた」・詳細の見出し直下に出す device_id と見比べれば登録簿上のどの端末かが分かる
 - 鍵を作り直す / 設定し直すと `crypto` は未確認に戻る。`pending_nonce` は API に出さない
 
@@ -157,7 +157,7 @@ bark-admin が中身を見るのは `/register` と `/r/:token/register` の 1 �
 ## 画面
 
 - `/bark-admin/` TOP: 通知テストフォーム (スキーマから生成、送信先はフィルタに当たる全台) / フィルタ入力 (`k=v` 改行区切り AND、値は `device` と同じ解釈) / デバイス一覧 (device_id, owner, name とその下に `info.os_version`, 暗号化の有無と未確認, 主要 4 tag + 残り n 件, registered_at。device_id で詳細へ) / デバイス追加 (招待の作成: タグ・メモ・「暗号化する」(既定 on) → QR、招待の一覧: タグ・メモ・暗号化・登録数、QR を再表示 / 削除)
-- `/bark-admin/devices/:id`: 見出し (name、その直下に device_id を大きめの固定幅で全文、owner)、タグ編集、暗号化 (無効 / 有効・未確認 / 有効・確認済み <日時>、「暗号化キーを設定」で鍵を作ってコピー、再コピー、「暗号化の確認を送る」、作り直す、無効にする)、受信確認 (未確認 / 確認済み <日時>、「受信確認を送る」)、端末情報 (`info` の定義リスト、無い項目は出さない)、退役ボタン、device_token と登録日時
+- `/bark-admin/devices/:id`: 見出し (name、その直下に device_id を大きめの固定幅で全文、owner) の下を 3 節に分ける。「端末」(登録簿の固有フィールド: device_id / registered_at / device_token / 受信確認 (未確認 / 確認済み <日時>) / 暗号化 (無効 / 有効・未確認 / 有効・確認済み <日時>) の定義リスト、その下に受信確認の操作 (「受信確認を送る」) と暗号化の操作 (「暗号化キーを設定」で鍵を作ってコピー、再コピー、「暗号化の確認を送る」、作り直す、無効にする))、「タグ」(今のタグのチップと編集欄)、「端末情報」(`info` の定義リスト、無い項目は出さない、編集できない)。最後に退役ボタン
 - `/bark-admin/add/:invite`: 招待の案内ページ。開くたびにその 1 台用の登録トークンを発行する。3 段のステップ (1. Bark にサーバーを追加 (1 回だけ押せる、Bark が開かなかった時だけ App Store の案内) → 2. 受信確認 → 3. 暗号化 (鍵付きの招待だけ、伏せ字の鍵をコピーして Bark を開く、暗号化の確認を送る))。済んだ段に ✓、今の段を強調、先の段は薄く (登録の流れ参照)
 - ビルド無しの静的 HTML + fetch。モダン CSS / JS (Baseline) を使い古いハックで代替しない
 
