@@ -1,4 +1,4 @@
-// /bark-admin/add/:invite の案内ページ。QR から iPhone の Safari で開かれ、Bark アプリにサーバ (招待入り URL) を追加させる。
+// /bark-admin/add/:invite の案内ページと、暗号化の確認通知から開かれるページ。QR から iPhone の Safari で開かれ、Bark アプリにサーバ (招待入り URL) を追加させる。
 // 最初に目に入るのは「Bark で開く」、App Store はその下 (見た目の判断は docs/design/ui.md)。
 
 export const APP_STORE_URL = "https://apps.apple.com/app/bark-custom-notifications/id1403753865";
@@ -67,6 +67,11 @@ ${p.cryptoKey === null ? "" : `${cryptoSection(p.cryptoKey)}\n`}<div class="inst
   );
 }
 
-export function notFoundPageHtml(message: string): string {
-  return page("bark-admin: 見つからない", `<h1>招待が見つからない</h1>\n<p>${esc(message)}</p>`);
+export function notFoundPageHtml(message: string, heading = "招待が見つからない"): string {
+  return page("bark-admin: 見つからない", `<h1>${esc(heading)}</h1>\n<p>${esc(message)}</p>`);
+}
+
+// 暗号化の確認通知をタップして開かれるページ (復号できた端末だけが URL を知る)
+export function confirmedPageHtml(): string {
+  return page("bark-admin: 暗号化を確認できた", `<h1>暗号化を確認できた</h1>\n<p>この端末は通知を復号できている。このページは閉じてよい。</p>`);
 }

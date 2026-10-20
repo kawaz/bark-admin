@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { archiveDevice, matchTags, patchDevice, resolveTargets, selectDevices, upsertRegistration } from "../src/registry.ts";
+import { archiveDevice, finishCryptoConfirm, matchTags, patchDevice, resolveTargets, selectDevices, startCryptoConfirm, upsertRegistration } from "../src/registry.ts";
 import type { Devices } from "../src/schema/registry.ts";
 
 const devices: Devices = {
@@ -64,5 +64,19 @@ describe("patch / archive", () => {
     const once = archiveDevice(a, "t1");
     expect(once.archived_at).toBe("t1");
     expect(archiveDevice(once, "t2").archived_at).toBe("t1");
+  });
+});
+
+describe("crypto confirm", () => {
+  const withKey = { device_token: "ta", registered_at: "t0", archived_at: null, tags: {}, crypto: { key: "K".repeat(32), confirmed_at: null, pending_nonce: null } };
+  test("start records the nonce, finish with the same nonce confirms and clears it", () => {
+    const started = startCryptoConfirm(withKey, "N1");
+    expect(started?.crypto?.pending_nonce).toBe("N1");
+    expect(started && finishCryptoConfirm(started, "N2", "t1")).toBeNull();
+    expect(started && finishCryptoConfirm(started, "N1", "t1")?.crypto).toEqual({ key: "K".repeat(32), confirmed_at: "t1", pending_nonce: null });
+  });
+  test("no key: cannot start; no pending nonce: cannot finish", () => {
+    expect(startCryptoConfirm({ ...withKey, crypto: null }, "N1")).toBeNull();
+    expect(finishCryptoConfirm(withKey, "N1", "t1")).toBeNull();
   });
 });

@@ -3,12 +3,23 @@ import { join } from "node:path";
 import QRCode from "qrcode";
 import * as v from "valibot";
 import { BarkServer, RegisterResponseSchema, UpstreamError, type PushResult } from "./bark-server.ts";
-import { addPageHtml, notFoundPageHtml } from "./pages/add.ts";
+import { addPageHtml, confirmedPageHtml, notFoundPageHtml } from "./pages/add.ts";
 import { parseJsonWith, parseWith } from "./parse.ts";
-import { encryptForBark, newCryptoIv, newCryptoKey } from "./push-crypto.ts";
-import { archiveDevice, listItem, patchDevice, resolveTargets, selectDevices, upsertRegistration } from "./registry.ts";
+import { encryptForBark, newCryptoIv, newCryptoKey, randomAlnum } from "./push-crypto.ts";
+import {
+  archiveDevice,
+  finishCryptoConfirm,
+  freshCrypto,
+  listItem,
+  patchDevice,
+  resolveTargets,
+  selectDevices,
+  startCryptoConfirm,
+  upsertRegistration,
+  view,
+} from "./registry.ts";
 import { pushParamFields, pushParamsSchema, type PushParams } from "./schema/push-params.ts";
-import { CreateInviteSchema, PatchDeviceSchema, TagsSchema, type DeviceCrypto, type DeviceRecord, type Tags } from "./schema/registry.ts";
+import { CreateInviteSchema, PatchDeviceSchema, TagsSchema, type CryptoKeyOnly, type DeviceRecord, type Devices, type Tags } from "./schema/registry.ts";
 import type { Store } from "./store.ts";
 import { localIso } from "./time.ts";
 
@@ -33,6 +44,8 @@ const AdminPushEnvelopeSchema = v.looseObject({ device: v.optional(TagsSchema) }
 
 // register の要求側の key (使用済み招待での再登録の判定用)。bark-server と同じく key / device_key の両方を見る
 const RegisterKeySchema = v.looseObject({ key: v.optional(v.string()), device_key: v.optional(v.string()) });
+
+type ConfirmStart = { kind: "not-found" } | { kind: "no-key" } | { kind: "started"; key: string };
 
 function json(status: number, body: unknown): Response {
   return Response.json(body, { status });
@@ -99,7 +112,7 @@ export function createApp(deps: AppDeps) {
     const isRegister = path === "/register";
 
     let inviteTags: Tags = {};
-    let inviteCrypto: DeviceCrypto | null = null;
+    let inviteCrypto: CryptoKeyOnly | null = null;
     let inviteUnused = false;
     if (invite !== null) {
       const rec = (await store.invites.read())[invite];
@@ -130,7 +143,7 @@ export function createApp(deps: AppDeps) {
     deviceId: string,
     deviceToken: string,
     tags: Tags,
-    crypto: DeviceCrypto | null,
+    crypto: CryptoKeyOnly | null,
     invite: string | null,
     inviteUnused: boolean,
   ) {
@@ -214,7 +227,47 @@ export function createApp(deps: AppDeps) {
       const next = fn(rec);
       return { next: { ...cur, [id]: next }, result: next };
     });
-    return updated === null ? json(404, { error: `device ${id} not found` }) : json(200, { device_id: id, ...updated });
+    return updated === null ? json(404, { error: `device ${id} not found` }) : json(200, view(id, updated));
+  }
+
+  // 鍵が Bark に正しく設定されたかの確認: nonce 入りの URL を暗号化した通知で送る。
+  // 復号できた端末だけが URL を知り、タップで開くと confirmCrypto が確認済みにする
+  async function startConfirm(id: string): Promise<Response> {
+    const nonce = randomAlnum(22);
+    const started = await store.devices.update((cur): { next?: Devices; result: ConfirmStart } => {
+      const r = cur[id];
+      if (r === undefined) return { result: { kind: "not-found" } };
+      const next = startCryptoConfirm(r, nonce);
+      if (next === null || next.crypto === null) return { result: { kind: "no-key" } };
+      return { next: { ...cur, [id]: next }, result: { kind: "started", key: next.crypto.key } };
+    });
+    if (started.kind === "not-found") return json(404, { error: `device ${id} not found` });
+    if (started.kind === "no-key") return json(409, { error: `device ${id} has no crypto key. Set one with POST ${ADMIN}/api/devices/${id}/crypto first` });
+    const key = started.key;
+    return withUpstream(async () => {
+      const r = await pushEncrypted(
+        {
+          title: "bark-admin 暗号化の確認",
+          body: "この通知をタップすると確認が完了する",
+          url: `${serverUrl}${ADMIN}/api/devices/${encodeURIComponent(id)}/crypto/confirm/${nonce}`,
+        },
+        { id, key },
+      );
+      const sent = { ...r, encrypted: true };
+      if (r.status === 200) return json(200, { sent });
+      return json(502, { error: `bark-server did not accept the confirm notification: ${r.message ?? `status ${r.status}`}`, sent });
+    });
+  }
+
+  async function confirmCrypto(id: string, nonce: string): Promise<Response> {
+    const at = now();
+    const ok = await store.devices.update((cur) => {
+      const r = cur[id];
+      const next = r === undefined ? null : finishCryptoConfirm(r, nonce, at);
+      return next === null ? { result: false } : { next: { ...cur, [id]: next }, result: true };
+    });
+    if (!ok) return html(404, notFoundPageHtml("この確認リンクは使用済みか古い。管理画面の「確認」で送り直す。", "確認リンクが見つからない"));
+    return html(200, confirmedPageHtml());
   }
 
   async function createInvite(req: Request): Promise<Response> {
@@ -222,7 +275,7 @@ export function createApp(deps: AppDeps) {
     if (!r.ok) return json(400, { error: r.error.message });
     const invite = newInviteId();
     const createdAt = now();
-    const crypto = r.value.encrypt ? { key: newCryptoKey() } : null;
+    const crypto: CryptoKeyOnly | null = r.value.encrypt ? { key: newCryptoKey() } : null;
     await store.invites.update((cur) => ({
       next: { ...cur, [invite]: { tags: r.value.tags, created_at: createdAt, used_by: null, crypto } },
       result: null,
@@ -259,7 +312,7 @@ export function createApp(deps: AppDeps) {
     [`${ADMIN}/api/devices/:id`]: {
       GET: async (req: Bun.BunRequest<"/bark-admin/api/devices/:id">) => {
         const rec = (await store.devices.read())[req.params.id];
-        return rec === undefined ? json(404, { error: `device ${req.params.id} not found` }) : json(200, { device_id: req.params.id, ...rec });
+        return rec === undefined ? json(404, { error: `device ${req.params.id} not found` }) : json(200, view(req.params.id, rec));
       },
       PATCH: async (req: Bun.BunRequest<"/bark-admin/api/devices/:id">) => {
         const r = parseJsonWith(PatchDeviceSchema, await req.text());
@@ -271,12 +324,19 @@ export function createApp(deps: AppDeps) {
         return updateDevice(req.params.id, (rec) => archiveDevice(rec, at));
       },
     },
-    // 鍵を作り直して保存し、鍵入りの device を返す (詳細画面の「鍵を作り直す」/「暗号化する」)
+    // 鍵を作り (作り直し) 保存し、鍵入りの device を返す (詳細画面の「暗号化キーを設定」/「鍵を作り直す」)。確認状態は未確認に戻る
     [`${ADMIN}/api/devices/:id/crypto`]: {
       POST: (req: Bun.BunRequest<"/bark-admin/api/devices/:id/crypto">) => {
         const key = newCryptoKey();
-        return updateDevice(req.params.id, (rec) => ({ ...rec, crypto: { key } }));
+        return updateDevice(req.params.id, (rec) => ({ ...rec, crypto: freshCrypto({ key }) }));
       },
+    },
+    [`${ADMIN}/api/devices/:id/crypto/confirm`]: {
+      POST: (req: Bun.BunRequest<"/bark-admin/api/devices/:id/crypto/confirm">) => startConfirm(req.params.id),
+    },
+    // 確認通知の url。iPhone の Safari で開かれるので HTML を返す
+    [`${ADMIN}/api/devices/:id/crypto/confirm/:nonce`]: {
+      GET: (req: Bun.BunRequest<"/bark-admin/api/devices/:id/crypto/confirm/:nonce">) => confirmCrypto(req.params.id, req.params.nonce),
     },
     [`${ADMIN}/api/invites`]: { POST: createInvite },
     [`${ADMIN}/api/invites/:invite/qr.svg`]: {

@@ -89,7 +89,7 @@ const KEY_B = "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 async function setCrypto(id: string, key: string) {
   await store.devices.update((cur) => {
     const rec = cur[id];
-    return rec === undefined ? { result: null } : { next: { ...cur, [id]: { ...rec, crypto: { key } } }, result: null };
+    return rec === undefined ? { result: null } : { next: { ...cur, [id]: { ...rec, crypto: { key, confirmed_at: null, pending_nonce: null } } }, result: null };
   });
 }
 
@@ -200,7 +200,7 @@ describe("POST /bark-admin/push to devices with a crypto key", () => {
 
   test("per-device failure of an encrypted push is reported", async () => {
     await store.devices.update((cur) => ({
-      next: { ...cur, BADENC: { device_token: "x", registered_at: "t0", archived_at: null, tags: { owner: "z" }, crypto: { key: KEY_A } } },
+      next: { ...cur, BADENC: { device_token: "x", registered_at: "t0", archived_at: null, tags: { owner: "z" }, crypto: { key: KEY_A, confirmed_at: null, pending_nonce: null } } },
       result: null,
     }));
     const res = await post("/bark-admin/push", { device: { owner: "z" }, body: "b" });
@@ -240,14 +240,19 @@ describe("devices API", () => {
     expect(await (await post("/bark-admin/api/devices/A", { archived_at: null }, "PATCH")).json()).toMatchObject({ archived_at: null });
   });
 
-  test("the list shows only whether a device is encrypted, the detail shows the key", async () => {
+  test("the list shows only crypto.confirmed_at, the detail shows the key, neither shows the nonce", async () => {
     await setCrypto("A", KEY_A);
+    await fetch(`${base}/bark-admin/api/devices/A/crypto/confirm`, { method: "POST" });
+    const nonce = (await store.devices.read())["A"]?.crypto?.pending_nonce ?? "";
+    expect(nonce).not.toBe("");
     const lines = (await (await fetch(`${base}/bark-admin/api/devices?name=iphone`)).text()).split("\n").filter((l) => l !== "");
     expect(lines.map((l) => JSON.parse(l))).toEqual([
-      { device_id: "A", device_token: "ta", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, encrypted: true },
+      { device_id: "A", device_token: "ta", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, crypto: { confirmed_at: null } },
     ]);
     expect(lines.join("")).not.toContain(KEY_A);
-    expect(await (await fetch(`${base}/bark-admin/api/devices/A`)).json()).toMatchObject({ crypto: { key: KEY_A } });
+    const detail = await (await fetch(`${base}/bark-admin/api/devices/A`)).text();
+    expect(JSON.parse(detail)).toMatchObject({ crypto: { key: KEY_A, confirmed_at: null } });
+    expect(detail).not.toContain(nonce);
     expect(await (await fetch(`${base}/bark-admin/api/devices/B`)).json()).toMatchObject({ crypto: null });
   });
 
@@ -255,13 +260,65 @@ describe("devices API", () => {
     const CryptoView = v.object({ crypto: v.object({ key: v.string() }) });
     const first = v.parse(CryptoView, await (await fetch(`${base}/bark-admin/api/devices/A/crypto`, { method: "POST" })).json()).crypto.key;
     expect(first).toMatch(/^[A-Za-z0-9]{32}$/);
-    expect((await store.devices.read())["A"]?.crypto).toEqual({ key: first });
+    expect((await store.devices.read())["A"]?.crypto).toEqual({ key: first, confirmed_at: null, pending_nonce: null });
     const second = v.parse(CryptoView, await (await fetch(`${base}/bark-admin/api/devices/A/crypto`, { method: "POST" })).json()).crypto.key;
     expect(second).not.toBe(first);
 
     expect(await (await post("/bark-admin/api/devices/A", { crypto: { key: KEY_B } }, "PATCH")).json()).toMatchObject({ crypto: { key: KEY_B } });
     expect(await (await post("/bark-admin/api/devices/A", { crypto: null }, "PATCH")).json()).toMatchObject({ crypto: null });
     expect((await fetch(`${base}/bark-admin/api/devices/NOPE/crypto`, { method: "POST" })).status).toBe(404);
+  });
+
+  test("confirm sends an encrypted notification whose url carries the nonce; only that nonce confirms, once", async () => {
+    await setCrypto("A", KEY_A);
+    const res = await fetch(`${base}/bark-admin/api/devices/A/crypto/confirm`, { method: "POST" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ sent: { device_id: "A", status: 200, encrypted: true } });
+    const nonce = (await store.devices.read())["A"]?.crypto?.pending_nonce ?? "";
+    expect(nonce).toMatch(/^[A-Za-z0-9]{22}$/);
+
+    // 確認通知は暗号化されていて、平文の url は bark-server に渡らない
+    const [sealed] = sealedPushes();
+    expect(sealed?.device_key).toBe("A");
+    expect(received.at(-1)?.body).not.toContain(nonce);
+    const url = `https://bark.example/bark-admin/api/devices/A/crypto/confirm/${nonce}`;
+    expect(sealed && JSON.parse(nodeDecrypt(KEY_A, sealed.iv, sealed.ciphertext))).toEqual({
+      title: "bark-admin 暗号化の確認",
+      body: "この通知をタップすると確認が完了する",
+      url,
+    });
+
+    // 違う nonce は 404 で状態を変えない
+    const wrong = await fetch(`${base}/bark-admin/api/devices/A/crypto/confirm/WRONG${nonce.slice(5)}`);
+    expect(wrong.status).toBe(404);
+    expect((await store.devices.read())["A"]?.crypto).toEqual({ key: KEY_A, confirmed_at: null, pending_nonce: nonce });
+
+    const ok = await fetch(`${base}/bark-admin/api/devices/A/crypto/confirm/${nonce}`);
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("content-type")).toContain("text/html");
+    expect(await ok.text()).toContain("暗号化を確認できた");
+    expect((await store.devices.read())["A"]?.crypto).toEqual({ key: KEY_A, confirmed_at: "NOW", pending_nonce: null });
+    expect(await (await fetch(`${base}/bark-admin/api/devices/A`)).json()).toMatchObject({ crypto: { key: KEY_A, confirmed_at: "NOW" } });
+
+    // 同じ URL は 2 回目は効かない
+    expect((await fetch(`${base}/bark-admin/api/devices/A/crypto/confirm/${nonce}`)).status).toBe(404);
+
+    // 鍵を作り直すと未確認に戻る
+    await fetch(`${base}/bark-admin/api/devices/A/crypto`, { method: "POST" });
+    expect((await store.devices.read())["A"]?.crypto?.confirmed_at).toBeNull();
+  });
+
+  test("confirm needs a key (409) and an existing device (404); a newer confirm replaces the nonce", async () => {
+    expect((await fetch(`${base}/bark-admin/api/devices/B/crypto/confirm`, { method: "POST" })).status).toBe(409);
+    expect((await fetch(`${base}/bark-admin/api/devices/NOPE/crypto/confirm`, { method: "POST" })).status).toBe(404);
+    expect((await fetch(`${base}/bark-admin/api/devices/B/crypto/confirm/anything`)).status).toBe(404);
+    expect(received).toHaveLength(0);
+
+    await setCrypto("A", KEY_A);
+    await fetch(`${base}/bark-admin/api/devices/A/crypto/confirm`, { method: "POST" });
+    const first = (await store.devices.read())["A"]?.crypto?.pending_nonce ?? "";
+    await fetch(`${base}/bark-admin/api/devices/A/crypto/confirm`, { method: "POST" });
+    expect((await fetch(`${base}/bark-admin/api/devices/A/crypto/confirm/${first}`)).status).toBe(404);
   });
 
   test.each([
@@ -299,7 +356,7 @@ describe("register via invite", () => {
     expect(page).toContain(key);
 
     await fetch(`${base}/r/${inv.invite}/register?devicetoken=tok&key=`);
-    expect((await store.devices.read())["NEWKEY"]?.crypto).toEqual({ key });
+    expect((await store.devices.read())["NEWKEY"]?.crypto).toEqual({ key, confirmed_at: null, pending_nonce: null });
     // 使用済みの招待ページには鍵を出さない
     expect(await (await fetch(`${base}/bark-admin/add/${inv.invite}`)).text()).not.toContain(key);
   });
