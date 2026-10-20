@@ -375,6 +375,9 @@ describe("devices API", () => {
     // 節は 端末 (固有フィールド) / タグ (チップ) / 端末情報 (あれば)。今回確認した受信確認の行を強調する
     expect(page).toContain('<h2 id="fields-heading">端末</h2>');
     expect(page).toContain('<h2 id="tags-heading">タグ</h2>');
+    // 節ごとに「何が保存されているか」と「誰が書くか」の説明
+    expect(page).toContain("登録簿が端末ごとに持つ固有の項目");
+    expect(page).toContain("登録簿に保存、自由に直せる");
     expect(page).not.toContain("端末情報");
     expect(page).toContain('<li class="tag">owner=kawaz</li><li class="tag">name=iphone</li>');
     expect(page).toContain(`<dt>registered_at</dt><dd><time datetime="t0">`);
@@ -412,6 +415,7 @@ describe("devices API", () => {
     await fetch(`${base}/register?devicetoken=tb2&key=B`, { headers: { "user-agent": "Bark/1.6.4 (me.fin.bark; build:8; iOS 26.7.1) Alamofire/5.10.2" } });
     const withInfo = await confirmPage("B");
     expect(withInfo).toContain('<h2 id="info-heading">端末情報</h2>');
+    expect(withInfo).toContain("Bark アプリが登録するたびに上書きされる");
     expect(withInfo).toContain("<dt>os_version</dt><dd>iOS 26.7.1</dd>");
   });
 

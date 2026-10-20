@@ -154,10 +154,12 @@ export function confirmedPageHtml(p: { kind: "delivery" | "crypto"; deviceId: st
 <p>${what.line}Bark のサーバー一覧で、この device_id と同じ key のサーバーがこの端末の登録。</p>
 <section class="stack" aria-labelledby="fields-heading">
 <h2 id="fields-heading">端末</h2>
+<p class="hint">登録簿が端末ごとに持つ固有の項目。bark-admin が登録と確認のたびに書く</p>
 <dl class="facts">${fields}</dl>
 </section>
 <section class="stack" aria-labelledby="tags-heading">
 <h2 id="tags-heading">タグ</h2>
+<p class="hint">宛先の指定に使う <code>key=value</code>。登録簿に保存、自由に直せる</p>
 ${tags.length === 0 ? `<p class="hint">タグなし</p>` : `<ul class="tags">${tags.map(([k, val]) => `<li class="tag">${esc(k)}=${esc(val)}</li>`).join("")}</ul>`}
 </section>
 ${
@@ -165,6 +167,7 @@ ${
     ? ""
     : `<section class="stack" aria-labelledby="info-heading">
 <h2 id="info-heading">端末情報</h2>
+<p class="hint">登録簿に保存されている観察値 (<code>device.info</code>)。Bark アプリが登録するたびに上書きされる。編集はできない</p>
 <dl class="facts">${info}</dl>
 </section>
 `

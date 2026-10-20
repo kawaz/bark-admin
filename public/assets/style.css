@@ -99,9 +99,20 @@ select {
 }
 
 textarea {
-  field-sizing: content;
   min-block-size: 2.75rem;
   resize: vertical;
+}
+
+/* 内容に合わせて高さを変え、常に「今の行数 + 1 行」を保つ (末尾に 1 行の空きを見せ、書き足すと伸びる)。JS では測らない。
+   空きの 1 行は padding で取るので、最小 (1 行 + 空き 1 行) で 2 行分になる。未対応のブラウザは rows の固定高のまま */
+@supports (field-sizing: content) {
+  textarea {
+    field-sizing: content;
+    padding-block-end: calc(0.5rem + 1lh);
+    min-block-size: calc(2lh + 1rem + 2px);
+    /* 高さは内容で決まるので手で変えさせない */
+    resize: none;
+  }
 }
 
 textarea.kv {
@@ -512,9 +523,6 @@ main.top {
   }
   &.textarea {
     grid-column: 1 / -1;
-    > textarea {
-      min-block-size: calc(3lh + 1rem);
-    }
   }
   &.flag {
     grid-template-columns: auto 1fr;

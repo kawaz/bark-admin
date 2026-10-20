@@ -26,7 +26,7 @@
 
     <section class="fields stack" aria-labelledby="fields-heading">
       <h2 id="fields-heading">端末</h2>
-      <p class="hint">登録簿が端末ごとに持つ項目</p>
+      <p class="hint">登録簿が端末ごとに持つ固有の項目。bark-admin が登録と確認のたびに書く</p>
       <dl class="facts">
         <dt>device_id</dt>
         <dd><code id="device-id-fact"></code></dd>
@@ -70,7 +70,7 @@
 
     <section class="stack" aria-labelledby="tags-heading">
       <h2 id="tags-heading">タグ</h2>
-      <p class="hint">宛先の指定に使う <code>key=value</code>。自由に足して直せる</p>
+      <p class="hint">宛先の指定に使う <code>key=value</code>。登録簿に保存、自由に直せる</p>
       <ul id="tag-chips" class="tags"></ul>
       <form id="tags-form" class="stack">
         <label for="tags">編集</label>
@@ -85,7 +85,7 @@
 
     <section id="info" class="stack" aria-labelledby="info-heading" hidden>
       <h2 id="info-heading">端末情報</h2>
-      <p class="hint">登録のたびに Bark アプリの要求と tailnet から読み直す。編集はできない</p>
+      <p class="hint">登録簿に保存されている観察値 (<code>device.info</code>)。Bark アプリが登録するたびに上書きされる。編集はできない</p>
       <dl id="info-facts" class="facts"></dl>
     </section>
 
