@@ -8,6 +8,7 @@ import { BarkServer } from "../src/bark-server.ts";
 import type { TailnetInfo } from "../src/device-info.ts";
 import { parseJsonWith } from "../src/parse.ts";
 import { REGISTRATION_TTL_MS } from "../src/invites.ts";
+import { DeviceInfoSchema } from "../src/schema/registry.ts";
 import { openStore, setAsideLegacyInvites, type Store } from "../src/store.ts";
 import { localIso } from "../src/time.ts";
 import { nodeDecrypt } from "./node-aes-gcm.ts";
@@ -376,14 +377,15 @@ async function createInvite(tags: Record<string, string>, opts: { encrypt?: bool
   return v.parse(InviteSchema, await res.json());
 }
 
-// 招待ページを開く (= 登録トークンを 1 つ発行する)。ページに出た /r/<token> と鍵を返す
+// 招待ページを開く (= 登録トークンを 1 つ発行する)。ページに出た /r/<token> と、そのトークンの鍵を返す
 async function openAdd(invite: string, headers: Record<string, string> = {}) {
   const res = await fetch(`${base}/bark-admin/add/${invite}`, { headers });
   expect(res.status).toBe(200);
   const page = await res.text();
   const token = /bark:\/\/addserver\?address=https:\/\/bark\.example\/r\/([A-Za-z0-9_-]+)/.exec(page)?.[1] ?? "";
   expect(token).not.toBe("");
-  const key = /<code id="crypto-key" class="key">([A-Za-z0-9]{32})<\/code>/.exec(page)?.[1] ?? null;
+  // 鍵はページに出さないので登録簿から読む
+  const key = (await store.registrations.read())[token]?.crypto?.key ?? null;
   return { token, key, page };
 }
 
@@ -398,6 +400,9 @@ describe("invites and registration tokens", () => {
     expect(second.key).toMatch(/^[A-Za-z0-9]{32}$/);
     expect(first.key).not.toBe(second.key);
     expect(first.page).toContain("暗号化キー");
+    // 鍵の平文はページに出さない
+    expect(first.page).not.toContain(first.key ?? "-");
+    expect(first.page).toContain("••••••••");
     expect((await store.registrations.read())[first.token]).toMatchObject({ invite: inv.invite, crypto: { key: first.key }, used_by: null, used_at: null });
 
     expect((await fetch(`${base}/r/${first.token}/register?devicetoken=t1&key=E1`)).status).toBe(200);
@@ -495,6 +500,62 @@ describe("invites and registration tokens", () => {
     expect(page).toContain("https://apps.apple.com/app/bark-custom-notifications/id1403753865");
     const qr = await fetch(`${base}/bark-admin/api/invites/${inv.invite}/qr.svg`);
     expect(qr.headers.get("content-type")).toBe("image/svg+xml");
+  });
+
+  test("registrations API: unused / used (with the device) / expired / invite deleted / unknown 404; it never returns the key", async () => {
+    const RegSchema = v.object({
+      token: v.string(),
+      state: v.picklist(["unused", "used", "expired", "invite-deleted"]),
+      used_by: v.nullable(v.string()),
+      used_at: v.nullable(v.string()),
+      expires_at: v.string(),
+      encrypted: v.boolean(),
+      device: v.nullable(v.object({ device_id: v.string(), tags: v.record(v.string(), v.string()), info: v.optional(DeviceInfoSchema) })),
+    });
+    const status = async (token: string) => {
+      const res = await fetch(`${base}/bark-admin/api/registrations/${token}`);
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      return { body: v.parse(RegSchema, JSON.parse(text)), text };
+    };
+    const inv = await createInvite({ owner: "kawaz", name: "reg" }, { encrypt: true });
+    const used = await openAdd(inv.invite);
+    const later = await openAdd(inv.invite);
+    const before = await status(used.token);
+    expect(before.body).toEqual({ token: used.token, state: "unused", used_by: null, used_at: null, expires_at: localIso(new Date(START.getTime() + REGISTRATION_TTL_MS)), encrypted: true, device: null });
+
+    await fetch(`${base}/r/${used.token}/register?devicetoken=t&key=R1`);
+    const after = await status(used.token);
+    expect(after.body).toMatchObject({ state: "used", used_by: "R1", used_at: NOW, device: { device_id: "R1", tags: { owner: "kawaz", name: "reg" } } });
+    expect(after.text).not.toContain(used.key ?? "-");
+
+    clock = new Date(START.getTime() + REGISTRATION_TTL_MS);
+    expect((await status(later.token)).body.state).toBe("expired");
+    // 使った後は期限を過ぎても used
+    expect((await status(used.token)).body.state).toBe("used");
+    clock = START;
+    const orphan = await openAdd(inv.invite);
+    // 招待を手で消した (DELETE を通さない) 未使用のトークン
+    await store.invites.update(() => ({ next: {}, result: null }));
+    expect((await status(orphan.token)).body.state).toBe("invite-deleted");
+    expect((await fetch(`${base}/bark-admin/api/registrations/nope`)).status).toBe(404);
+  });
+
+  test("crypto-key API: the token's key after registration; 409 before, 404 without a key or for an unknown token", async () => {
+    const enc = await createInvite({ name: "enc" }, { encrypt: true });
+    const { token, key } = await openAdd(enc.invite);
+    expect((await fetch(`${base}/bark-admin/api/registrations/${token}/crypto-key`)).status).toBe(409);
+    await fetch(`${base}/r/${token}/register?devicetoken=t&key=K1`);
+    const res = await fetch(`${base}/bark-admin/api/registrations/${token}/crypto-key`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ key });
+    // 1 回限りではない
+    expect((await fetch(`${base}/bark-admin/api/registrations/${token}/crypto-key`)).status).toBe(200);
+
+    const plain = await openAdd((await createInvite({ name: "plain" })).invite);
+    await fetch(`${base}/r/${plain.token}/register?devicetoken=t&key=K2`);
+    expect((await fetch(`${base}/bark-admin/api/registrations/${plain.token}/crypto-key`)).status).toBe(404);
+    expect((await fetch(`${base}/bark-admin/api/registrations/nope/crypto-key`)).status).toBe(404);
   });
 
   test("unknown token is 404 for ping and register, unknown invite is 404 for the add page", async () => {

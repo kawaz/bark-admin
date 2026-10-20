@@ -807,6 +807,13 @@ main.detail {
   justify-self: stretch;
 }
 
+/* 鍵を見せない時の伏せ字 (平文は DOM に置かない) */
+code.key.masked {
+  color: var(--muted);
+  letter-spacing: 0.15em;
+  user-select: none;
+}
+
 code.key {
   flex: 1 1 16rem;
   min-inline-size: 0;
@@ -845,11 +852,17 @@ main.invite {
     display: grid;
     gap: 0.75rem;
   }
+  /* 押した後の経過 (追加中 / 追加できた / 使えない)。追加できた時は本文の大きさで太く */
+  .add .status:empty {
+    display: none;
+  }
+  .add .status.done {
+    font-size: var(--step-1);
+    font-weight: 700;
+  }
+  /* Bark 未導入向けの App Store は末尾に小さく */
   .install {
-    display: grid;
-    gap: 0.6rem;
-    justify-items: start;
-    padding-block-start: 1.5rem;
+    padding-block-start: 1.25rem;
     border-block-start: 1px solid var(--line);
   }
 }

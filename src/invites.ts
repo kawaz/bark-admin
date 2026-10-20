@@ -43,3 +43,12 @@ export function gateToken(rec: RegistrationRecord, p: { isRegister: boolean; req
   if (!p.inviteExists) return { kind: "gone", message: "the invite of this registration link was deleted. Ask for a new invite" };
   return { kind: "pass", consume: p.isRegister };
 }
+
+// 招待ページが見る登録トークンの状態。used が先 (使った後は期限や招待の削除に関わらず used)
+export type RegistrationState = "unused" | "used" | "expired" | "invite-deleted";
+
+export function registrationState(rec: RegistrationRecord, p: { inviteExists: boolean; now: Date }): RegistrationState {
+  if (rec.used_by !== null) return "used";
+  if (isExpired(rec, p.now)) return "expired";
+  return p.inviteExists ? "unused" : "invite-deleted";
+}
