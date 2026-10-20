@@ -201,7 +201,7 @@ export function createApp(deps: AppDeps) {
 
   async function addPage(invite: string): Promise<Response> {
     const rec = (await store.invites.read())[invite];
-    if (rec === undefined) return html(404, notFoundPageHtml("この招待リンクは無効です。管理画面で招待を作り直してください。"));
+    if (rec === undefined) return html(404, notFoundPageHtml("この招待リンクは登録簿にない。管理画面で招待を作り直す。"));
     return html(200, addPageHtml({ addserverUrl: inviteUrls(serverUrl, invite).addserver_url, tags: rec.tags, used: rec.used_by !== null }));
   }
 
