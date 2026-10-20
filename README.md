@@ -18,6 +18,10 @@ just run        # 127.0.0.1:8086 で起動 (BARK_ADMIN_ADDR / BARK_SERVER_URL �
 curl -sL -X POST https://bark.<host>/bark-admin/push -d '{"device":{"owner":"kawaz"},"title":"hello","body":"world"}'
 ```
 
+### 暗号化
+
+デバイス追加で「暗号化する」(既定 on) にすると、招待ページに 32 文字の鍵が出る。Bark アプリの「推送加密 / Push Encryption」で AES256 / GCM / noPadding を選び、Key にその鍵を貼る。以後 `/bark-admin/push` は、鍵を持つ端末へは通知の中身を AES-256-GCM で暗号化して 1 台ずつ送る (送る側はいつもどおり平文のパラメータを渡す)。既存の端末はデバイス詳細で鍵を作る / 作り直す / 外す。
+
 ## 開発
 
 ```sh
