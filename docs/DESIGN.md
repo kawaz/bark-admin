@@ -17,7 +17,7 @@ Web UI (人) ──────┘
 ```
 
 - bark-admin が `bark.<host>` の唯一の upstream。bark-server は直接叩かない
-- どちらも常駐せず、canddy の on-demand 起動 (502 → ensure スクリプト → 302)。bark-admin の ensure スクリプトが bark-server の ensure も呼ぶ
+- どちらも常駐せず、canddy の on-demand 起動 (502 → ensure スクリプト → 302)。bark-admin の ensure スクリプト (`ondemand/bark-admin-ensure.sh`) が bark-server の ensure (canddy-app-proxy の `ondemand/bark-server-ensure.sh`) も呼ぶ
 - bun + TypeScript。スキーマは valibot で定義し型を導く (境界で parse、`as` / `any` / `!` 禁止)
 - 設定: `${XDG_CONFIG_HOME}/bark-admin/config.toml` に `server_url` (招待 URL / QR に埋める公開 URL、例 `https://bark.kawaz-mbp16-20211217.kawaz.jp`) と `db_path` (登録簿の置き場) の 2 つ。listen port (8086) と bark-server の upstream (`127.0.0.1:8085`) は既定値で、変えるときは env `BARK_ADMIN_ADDR` / `BARK_SERVER_URL`
 - データ: `${XDG_DATA_HOME}/bark-admin/devices.json` (= `db_path` の既定) (atomic rename で書く。台数が 1 桁なので DB を持たず手で直せる方を優先)。招待は `invites.json`
@@ -46,23 +46,34 @@ Bark アプリは `bark://addserver?address=<URL>` でサーバを追加し、`<
 1. UI の「デバイス追加」でタグを入力 → `POST /api/invites` → `<invite>` 発行
 2. QR の中身は `https://bark.<host>/add/<invite>` (Safari で開く案内ページ。iOS カメラが custom scheme の QR を直接開けるかは未検証なので https にする)。ページに「Bark で開く」(`bark://addserver?address=https://bark.<host>/r/<invite>`) と App Store リンク
 3. アプリが `/r/<invite>/ping` `/r/<invite>/register` を叩く → bark-admin は bark-server の `/register` へ透過し、応答の `device_key` / `device_token` で登録簿を upsert、招待のタグを付ける (`used_by` を記録、招待は 1 回限り)
+   - アプリは APNs token を受け取るたび (= 起動のたび) に、追加済みの全サーバへ `register?key=<自分の key>&devicetoken=…` を送り直す (`ServerManager.syncAllServers`)。招待入り URL も同じ URL で叩かれ続けるので、使用済みの招待でも `key` が `used_by` と一致する再登録は通す。それ以外 (別端末・key 空) は bark-server に渡さず 410
+   - 未知の招待は ping / register / 案内ページとも 404
 4. 招待なしの素の `/register` も受ける (タグ空で登録、詳細ページで編集)。既存 key の再登録は token 更新のみ
 
 ## HTTP API
 
 | method path | 内容 |
 |---|---|
-| `POST /push` | body = bark V2 パラメータ + `device: {k: v, …}` (完全一致 AND。省略時は active 全台)。該当 device を解決して bark-server `/push` に `device_keys` で一括送信、`{sent: [{device_id, status}], skipped: n}` を返す。body に `device_key` / `device_keys` があればそのまま透過 (bark 互換クライアント用) |
+| `POST /push` | body = bark V2 パラメータ + `device: {k: v, …}` (完全一致 AND。省略時は active 全台)。該当 device を解決して bark-server `/push` に `device_keys` で一括送信、`{sent: [{device_id, status, message?}], skipped: n}` を返す (`status` / `message` は bark-server の device ごとの結果、`skipped` はタグに当たったが退役済みで外した台数)。該当 0 台なら bark-server を呼ばず 404。body に `device_key` / `device_keys` があればそのまま透過し、bark-server の応答も丸ごと返す (bark 互換クライアント用、`device` との併用は 400)。body は Content-Type に関わらず JSON として読み、スキーマに無いキーは 400 |
 | `GET /api/devices?k=v&…&archived=1` | jsonl (1 行 1 device、`device_id` 付き)。既定は active のみ |
 | `GET /api/devices/:id` | 1 件 JSON |
 | `PATCH /api/devices/:id` | `{tags}` でタグ置換 |
 | `DELETE /api/devices/:id` | `archived_at` を立てる (復帰は PATCH `{archived_at: null}`) |
 | `POST /api/invites` `{tags}` | `{invite, add_url, addserver_url}` |
+| `GET /api/invites/:invite/qr.svg` | `add_url` の QR (SVG)。TOP のデバイス追加で表示する |
+| `GET /api/schema` | 通知パラメータのスキーマ (`{fields: [{name, kind, group, description, …}]}`)。TOP のテストフォームはこれから描く |
 | `GET /add/:invite` | 案内ページ |
 | `GET /r/:invite/ping` `/r/:invite/register` `/ping` `/register` `/healthz` | bark-server へ透過 (register は登録簿へ反映) |
 | `GET /<key>/…` (bark の URL 形式) | 透過しない (404)。送信は `/push` に統一し、URL にキーや本文を載せない |
 
-パラメータのスキーマ (title / subtitle / body / sound / icon / image / group / level / volume / badge / call / url / copy / autoCopy / isArchive / action / id / delete / ciphertext / iv) は 1 か所で定義し、`/push` の検証と TOP のフォーム生成の両方に使う。
+パラメータのスキーマ (title / subtitle / body / markdown / sound / icon / image / group / level / volume / badge / call / url / copy / autoCopy / isArchive / ttl / action / id / delete / ciphertext / iv) は `src/schema/push-params.ts` の 1 か所で定義し、`/push` の検証と TOP のフォーム生成の両方に使う。出典は bark-server `docs/API_V2.md` と Bark `docs/en-us/params.md`。型は bark-server の扱いに合わせる: `badge` / `ttl` は JSON の整数、`volume` は `"0"`〜`"10"` の文字列、`call` / `autoCopy` / `delete` は `"1"`、`isArchive` は `"1"` / `"0"`、`delete` は `id` 必須。
+
+### bark-server の応答 (v2.3.9 で確認)
+
+- 共通: `{code, message, timestamp, data?}`
+- `/register` (GET は `devicetoken` / `key` の query、POST は body): `data = {key, device_key, device_token}`。`key` が空なら bark-server が新しい key を発行する。登録済み key は token を上書き
+- `/push` に `device_keys` (配列 or カンマ区切り) を渡すと、HTTP 200 で `data = [{device_key, code, message?}]` (device ごとの結果、失敗時だけ message)。1 台でも配列で返る
+- APNs が `BadDeviceToken` / 410 を返した device は bark-server 側で token が空にされる (登録簿は変わらない)
 
 ## 画面
 
