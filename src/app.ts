@@ -1,8 +1,9 @@
 import QRCode from "qrcode";
 import * as v from "valibot";
 import { assetRoutes, staticHtml } from "./assets.ts";
+import { clientIp, LOOPBACK, type Cidr } from "./client-ip.ts";
 import { BarkServer, RegisterResponseSchema, UpstreamError, type PushResult } from "./bark-server.ts";
-import { autoTags, forwardedIp, observeRegistration, tailscaleWhois, type TailnetInfo, type Whois } from "./device-info.ts";
+import { autoTags, observeRegistration, tailscaleWhois, type TailnetInfo, type Whois } from "./device-info.ts";
 import { gateToken, issueRegistration, registrationState } from "./invites.ts";
 import { addPageHtml, confirmedPageHtml, notFoundPageHtml } from "./pages/add.ts";
 import { parseJsonWith, parseWith } from "./parse.ts";
@@ -49,8 +50,10 @@ export type AppDeps = {
   store: Store;
   bark: BarkServer;
   now?: () => Date;
-  // X-Forwarded-For の IP から tailnet の端末情報を引く (既定は tailscale whois)
+  // 端末の IP から tailnet の端末情報を引く (既定は tailscale whois。引けなければ undefined)
   whois?: Whois;
+  // X-Forwarded-For を信頼する接続元 (既定は loopback だけ。src/client-ip.ts)
+  trustedProxies?: Cidr[];
 };
 
 // /bark-admin/push の body: bark V2 パラメータ (device_key / device_keys を除く) + device (タグ filter)
@@ -111,6 +114,7 @@ export function createApp(deps: AppDeps) {
   const clock = deps.now ?? (() => new Date());
   const now = () => localIso(clock());
   const whois = deps.whois ?? tailscaleWhois;
+  const trusted = deps.trustedProxies ?? LOOPBACK;
 
   async function withUpstream(fn: () => Promise<Response>): Promise<Response> {
     try {
@@ -125,7 +129,8 @@ export function createApp(deps: AppDeps) {
 
   // path (bark-server 側のパス) で bark-server へ透過する。/register だけは応答を登録簿へ写す。
   // token は /r/<token>/* 経由のときの登録トークン。
-  async function passThrough(req: Request, path: string, token: string | null): Promise<Response> {
+  // remote は接続元の実 IP (Bun の server.requestIP)。X-Forwarded-For を信頼するかの判定に使う
+  async function passThrough(req: Request, remote: string | undefined, path: string, token: string | null): Promise<Response> {
     const url = new URL(req.url);
     const contentType = req.headers.get("content-type");
     const body = await req.arrayBuffer();
@@ -145,8 +150,8 @@ export function createApp(deps: AppDeps) {
     }
 
     // whois は bark-server の応答を待つ間に引いておく
-    const ip = isRegister ? forwardedIp(req.headers.get("x-forwarded-for")) : undefined;
-    const tailnet: Promise<TailnetInfo> = ip === undefined ? Promise.resolve({}) : whois(ip);
+    const ip = isRegister ? clientIp(remote, req.headers.get("x-forwarded-for"), trusted) : undefined;
+    const tailnet: Promise<TailnetInfo | undefined> = ip === undefined ? Promise.resolve(undefined) : whois(ip);
 
     return withUpstream(async () => {
       const up = await bark.forward(req.method, `${path}${url.search}`, contentType, body);
@@ -164,7 +169,7 @@ export function createApp(deps: AppDeps) {
     deviceId: string,
     deviceToken: string,
     use: { token: string; tags: Tags; crypto: CryptoKeyOnly | null } | null,
-    seen: { headers: Headers; tailnet: TailnetInfo; client: Client | null },
+    seen: { headers: Headers; tailnet: TailnetInfo | undefined; client: Client | null },
   ) {
     const at = now();
     const info = observeRegistration({ ...seen, now: at });
@@ -456,12 +461,13 @@ export function createApp(deps: AppDeps) {
   };
 
   // routes に無いパス: /bark-admin/ 配下は 404、それ以外 (root) は bark-server 互換面として透過
-  function fallback(req: Request): Promise<Response> | Response {
+  function fallback(req: Request, server: Bun.Server<undefined>): Promise<Response> | Response {
+    const remote = server.requestIP(req)?.address;
     const { pathname } = new URL(req.url);
     if (pathname.startsWith(`${ADMIN}/`)) return json(404, { error: `not found. The admin UI is at ${ADMIN}/` });
     const m = /^\/r\/([^/]+)(\/.*)?$/.exec(pathname);
-    if (m?.[1] !== undefined) return passThrough(req, m[2] ?? "/", m[1]);
-    return passThrough(req, pathname, null);
+    if (m?.[1] !== undefined) return passThrough(req, remote, m[2] ?? "/", m[1]);
+    return passThrough(req, remote, pathname, null);
   }
 
   return { routes, fetch: fallback };

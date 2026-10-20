@@ -62,31 +62,23 @@ export function whoisToInfo(json: string, ip: string): TailnetInfo {
   };
 }
 
-// whois の実装 (テストでは差し替える)。IP から tailnet の端末情報を引く。引けなければ空
-export type Whois = (ip: string) => Promise<TailnetInfo>;
+// whois の実装 (テストでは差し替える)。IP から tailnet の端末情報を引く。
+// Tailscale は環境によっては無いおまけなので、引けない (CLI が無い・失敗・タイムアウト) 時は黙って undefined を返し、登録も自動タグも止めない
+export type Whois = (ip: string) => Promise<TailnetInfo | undefined>;
 
 // macOS の Tailscale.app 同梱 CLI。PATH には無い前提で絶対パスで呼ぶ
-const TAILSCALE = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
+export const TAILSCALE = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
 
 export const tailscaleWhois: Whois = async (ip) => {
   try {
     const proc = Bun.spawn([TAILSCALE, "whois", "--json", ip], { stdout: "pipe", stderr: "ignore", timeout: 2000 });
     const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-    return code === 0 ? whoisToInfo(out, ip) : {};
+    return code === 0 ? whoisToInfo(out, ip) : undefined;
   } catch (e) {
-    // CLI が無い・起動できない時も登録は通す
-    if (e instanceof Error) return {};
+    if (e instanceof Error) return undefined;
     throw e;
   }
 };
-
-const IpSchema = v.pipe(v.string(), v.ip());
-
-// canddy が付ける X-Forwarded-For の末尾 (= canddy が見た接続元)。IP の形でなければ無し
-export function forwardedIp(xff: string | null): string | undefined {
-  const last = xff?.split(",").at(-1)?.trim();
-  return last !== undefined && v.is(IpSchema, last) ? last : undefined;
-}
 
 // 招待ページのブラウザが送った client から端末の種類を決める。よく使われる判定をそのまま:
 // iPad の Safari はデスクトップ表示で Macintosh / MacIntel を名乗るので、MacIntel かつタッチ点が 2 以上を iPad とみなす
@@ -102,14 +94,14 @@ export function deviceKind(c: Client): DeviceKind | undefined {
 const KIND_OS: Record<DeviceKind, string> = { ipad: "ipados", iphone: "ios", mac: "macos", android: "android" };
 
 // 登録の要求 1 回分の観察値。再登録のたびに丸ごと置き換える
-export function observeRegistration(p: { headers: Headers; tailnet: TailnetInfo; client: Client | null; now: string }): DeviceInfo {
+export function observeRegistration(p: { headers: Headers; tailnet: TailnetInfo | undefined; client: Client | null; now: string }): DeviceInfo {
   const ua = present(p.headers.get("user-agent"));
   const c = p.client;
   return {
     ...(ua === undefined ? {} : parseBarkUserAgent(ua)),
     user_agent: ua,
     lang: present(p.headers.get("accept-language")),
-    ...p.tailnet,
+    ...(p.tailnet ?? {}),
     ...(c === null
       ? {}
       : {
@@ -124,15 +116,16 @@ export function observeRegistration(p: { headers: Headers; tailnet: TailnetInfo;
   };
 }
 
-// info から作るタグ。owner は人が決めるものなので作らない。
-// name は Tailscale のマシン名 (ts_machine)。Hostinfo.Hostname は iPadOS が localhost を返すので使わない。
-// os は招待ページで判定した端末の種類を優先する (Bark の UA も Tailscale も iPad を iOS と報告する)
+// info から作るタグ。owner は人が決めるものなので作らない。name は自由記入欄で後から人が直す前提なので、凝らずに端末の種類だけ入れる。
+// name / os / lang は Tailscale に依存しない: 種類は招待ページの JS の判定 (device_kind)、判定できなければ Bark の UA の OS が iOS なら iphone。
+// os はその種類の OS (種類が無ければ UA の OS 名の小文字)。ts_user は whois が取れた時だけ
 export function autoTags(info: DeviceInfo): Tags {
   const tags: Tags = {};
-  const name = info.ts_machine?.toLowerCase();
-  const os = info.device_kind === undefined ? (info.ts_os ?? info.os_version?.split(" ")[0])?.toLowerCase() : KIND_OS[info.device_kind];
+  const uaOs = info.os_version?.split(" ")[0];
+  const kind = info.device_kind ?? (uaOs === "iOS" ? "iphone" : undefined);
+  const os = kind === undefined ? uaOs?.toLowerCase() : KIND_OS[kind];
   const lang = info.lang === undefined ? undefined : firstLanguage(info.lang);
-  if (name !== undefined) tags["name"] = name;
+  if (kind !== undefined) tags["name"] = kind;
   if (os !== undefined) tags["os"] = os;
   if (lang !== undefined) tags["lang"] = lang;
   if (info.ts_user !== undefined) tags["ts_user"] = info.ts_user;

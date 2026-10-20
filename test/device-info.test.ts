@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { autoTags, deviceKind, firstLanguage, forwardedIp, observeRegistration, parseBarkUserAgent, whoisToInfo } from "../src/device-info.ts";
+import { autoTags, deviceKind, firstLanguage, observeRegistration, parseBarkUserAgent, whoisToInfo } from "../src/device-info.ts";
 
 const BARK_UA = "Bark/1.6.4 (me.fin.bark; build:8; iOS 26.7.1) Alamofire/5.10.2";
 
@@ -45,7 +45,8 @@ describe("whoisToInfo", () => {
     const json = JSON.stringify({ Node: { Name: "ipad-pro-12-9-gen-5.tail0000.ts.net.", ComputedName: "ipad-pro-12-9-gen-5", Hostinfo: { OS: "iOS", Hostname: "localhost" } } });
     const info = whoisToInfo(json, "100.84.237.16");
     expect(info).toMatchObject({ ts_machine: "ipad-pro-12-9-gen-5", ts_hostname: "localhost" });
-    expect(autoTags(info).name).toBe("ipad-pro-12-9-gen-5");
+    // マシン名もホスト名も name タグには使わない
+    expect(autoTags(info).name).toBeUndefined();
   });
   test("null and missing fields are left out", () => {
     const json = JSON.stringify({ Node: { Name: null, Hostinfo: { OS: null, Hostname: "" } }, UserProfile: null });
@@ -55,16 +56,6 @@ describe("whoisToInfo", () => {
   test("unreadable output keeps only the ip", () => {
     expect(whoisToInfo("no such peer", "100.1.2.3")).toEqual({ ts_ip: "100.1.2.3" });
     expect(whoisToInfo("{}", "100.1.2.3")).toEqual({ ts_ip: "100.1.2.3" });
-  });
-});
-
-describe("forwardedIp", () => {
-  test("last entry, only when it is an IP", () => {
-    expect(forwardedIp("100.104.30.107")).toBe("100.104.30.107");
-    expect(forwardedIp("1.2.3.4, 100.104.30.107")).toBe("100.104.30.107");
-    expect(forwardedIp("fd7a:115c:a1e0::1")).toBe("fd7a:115c:a1e0::1");
-    expect(forwardedIp("--help")).toBeUndefined();
-    expect(forwardedIp(null)).toBeUndefined();
   });
 });
 
@@ -111,19 +102,24 @@ describe("observeRegistration / autoTags", () => {
       browser_screen: "390x844@3",
       last_register_at: "T",
     });
-    expect(autoTags(info)).toEqual({ name: "zunphone", os: "ios", lang: "ja", ts_user: "user@example.com" });
+    expect(autoTags(info)).toEqual({ name: "iphone", os: "ios", lang: "ja", ts_user: "user@example.com" });
   });
-  test("without whois: os from the UA, no name / ts_user; never owner", () => {
-    const info = observeRegistration({ headers, tailnet: {}, client: null, now: "T" });
-    expect(autoTags(info)).toEqual({ os: "ios", lang: "ja" });
-    expect(autoTags(observeRegistration({ headers: new Headers(), tailnet: {}, client: null, now: "T" }))).toEqual({});
+  test("without whois and without the invite page's client (the standard path): name / os from the Bark UA (iOS → iphone), no ts_user; never owner", () => {
+    const info = observeRegistration({ headers, tailnet: undefined, client: null, now: "T" });
+    expect(info).not.toHaveProperty("ts_ip");
+    expect(autoTags(info)).toEqual({ name: "iphone", os: "ios", lang: "ja" });
+    expect(autoTags(observeRegistration({ headers: new Headers(), tailnet: undefined, client: null, now: "T" }))).toEqual({});
   });
-  test("os: the device kind from the invite page wins over the Bark UA / Tailscale (both say iOS on an iPad); name never comes from Hostname", () => {
-    const tailnet = { ts_hostname: "localhost", ts_os: "iOS" };
-    expect(autoTags({ ...tailnet, device_kind: "ipad" })).toEqual({ os: "ipados" });
-    expect(autoTags({ ...tailnet, device_kind: "iphone" })).toEqual({ os: "ios" });
-    expect(autoTags({ ...tailnet, device_kind: "mac" })).toEqual({ os: "macos" });
-    expect(autoTags({ ...tailnet, device_kind: "android" })).toEqual({ os: "android" });
-    expect(autoTags(tailnet)).toEqual({ os: "ios" });
+  test("name / os: the device kind from the invite page wins over the Bark UA (which says iOS on an iPad); Tailscale is not used", () => {
+    const ua = { os_version: "iOS 26.7.1", ts_machine: "ipad-pro-12-9-gen-5", ts_hostname: "localhost", ts_os: "iOS" };
+    expect(autoTags({ ...ua, device_kind: "ipad" })).toEqual({ name: "ipad", os: "ipados" });
+    expect(autoTags({ ...ua, device_kind: "iphone" })).toEqual({ name: "iphone", os: "ios" });
+    expect(autoTags({ ...ua, device_kind: "mac" })).toEqual({ name: "mac", os: "macos" });
+    expect(autoTags({ ...ua, device_kind: "android" })).toEqual({ name: "android", os: "android" });
+    expect(autoTags(ua)).toEqual({ name: "iphone", os: "ios" });
+    // Bark の UA の OS が iOS でなければ name は付けず、os は UA の OS 名
+    expect(autoTags({ os_version: "macOS 15.1" })).toEqual({ os: "macos" });
+    // Tailscale だけでは何も付けない
+    expect(autoTags({ ts_machine: "zunphone", ts_os: "iOS" })).toEqual({});
   });
 });

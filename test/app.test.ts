@@ -60,9 +60,9 @@ let base: string;
 const START = new Date("2026-10-20T12:00:00+09:00");
 let clock = START;
 const NOW = localIso(START);
-// 偽 tailscale whois: 引かれた IP を記録し、whoisResult を返す
+// 偽 tailscale whois: 引かれた IP を記録し、whoisResult を返す。既定は「引けない」(undefined、Tailscale の無い環境) が標準の経路
 const whoisCalls: string[] = [];
-let whoisResult: TailnetInfo = {};
+let whoisResult: TailnetInfo | undefined;
 
 afterAll(() => {
   fakeBark.stop(true);
@@ -72,7 +72,7 @@ beforeEach(async () => {
   received.length = 0;
   whoisCalls.length = 0;
   clock = START;
-  whoisResult = {};
+  whoisResult = undefined;
   dir = await mkdtemp(join(tmpdir(), "bark-admin-app-"));
   store = openStore(join(dir, "devices.json"));
   await store.devices.update(() => ({
@@ -706,36 +706,45 @@ describe("register", () => {
 
 describe("device info and auto tags on register", () => {
   const BARK_UA = "Bark/1.6.4 (me.fin.bark; build:8; iOS 26.7.1) Alamofire/5.10.2";
+  // テストの要求は loopback から来るので、X-Forwarded-For (= canddy が見た接続元) を信頼する
   const barkHeaders = { "user-agent": BARK_UA, "accept-language": "ja;q=1.0, en;q=0.9", "x-forwarded-for": "100.104.30.107" };
+  const observed = { bark_version: "1.6.4", bark_build: "8", os_version: "iOS 26.7.1", user_agent: BARK_UA, lang: "ja;q=1.0, en;q=0.9", last_register_at: NOW };
   const tailnet = { ts_name: "zunphone.tail0000.ts.net", ts_machine: "zunphone", ts_hostname: "zunPhone", ts_os: "iOS", ts_user: "user@example.com", ts_ip: "100.104.30.107" };
-  const observed = { bark_version: "1.6.4", bark_build: "8", os_version: "iOS 26.7.1", user_agent: BARK_UA, lang: "ja;q=1.0, en;q=0.9", ...tailnet, last_register_at: NOW };
 
-  test("plain /register records info and fills only missing tags with auto tags", async () => {
-    whoisResult = tailnet;
+  test("plain /register without Tailscale: info from the request, only missing tags filled (name / os from the Bark UA)", async () => {
     expect((await fetch(`${base}/register?devicetoken=t9&key=A`, { headers: barkHeaders })).status).toBe(200);
+    // whois は X-Forwarded-For の IP で引こうとして、引けなくても登録は通る
     expect(whoisCalls).toEqual(["100.104.30.107"]);
     const a = (await store.devices.read())["A"];
     expect(a?.info).toEqual(observed);
-    // 既存の name=iphone は残り、無いキーだけ足される
-    expect(a?.tags).toEqual({ owner: "kawaz", name: "iphone", os: "ios", lang: "ja", ts_user: "user@example.com" });
-    const detail = await (await fetch(`${base}/bark-admin/api/devices/A`)).json();
-    expect(detail).toMatchObject({ info: observed });
+    // 既存の name=iphone は残り、無いキーだけ足される。ts_user は付かない
+    expect(a?.tags).toEqual({ owner: "kawaz", name: "iphone", os: "ios", lang: "ja" });
+    expect(await (await fetch(`${base}/bark-admin/api/devices/A`)).json()).toMatchObject({ info: observed });
     const [line] = (await (await fetch(`${base}/bark-admin/api/devices?name=iphone`)).text()).split("\n");
-    expect(JSON.parse(line ?? "")).toMatchObject({ device_id: "A", info: { ts_hostname: "zunPhone", os_version: "iOS 26.7.1" } });
+    expect(JSON.parse(line ?? "")).toMatchObject({ device_id: "A", info: { os_version: "iOS 26.7.1" } });
     expect(line).not.toContain(BARK_UA);
-  });
 
-  test("no X-Forwarded-For: no whois, os from the UA; a failed whois still registers", async () => {
+    // 新しい端末: name は Bark の UA の iOS から iphone
     await fetch(`${base}/register?devicetoken=t1&key=`, { headers: { "user-agent": BARK_UA } });
-    expect(whoisCalls).toEqual([]);
-    expect((await store.devices.read())["NEWKEY"]?.tags).toEqual({ os: "ios" });
-    // whois が何も返さなくても登録は通る
-    expect((await fetch(`${base}/register?devicetoken=t2&key=`, { headers: barkHeaders })).status).toBe(200);
-    expect((await store.devices.read())["NEWKEY"]?.info).toMatchObject({ os_version: "iOS 26.7.1", last_register_at: NOW });
+    expect((await store.devices.read())["NEWKEY"]?.tags).toEqual({ name: "iphone", os: "ios" });
   });
 
-  test("/r/:token/register: invite tags win over auto tags; the client the invite page sent goes to info and decides os", async () => {
+  test("the IP for whois: X-Forwarded-For from loopback (the proxy), the peer address without it", async () => {
+    await fetch(`${base}/register?devicetoken=t1&key=`, { headers: { "user-agent": BARK_UA } });
+    // テストのサーバへは loopback (127.0.0.1 か ::1) から繋がる
+    expect(whoisCalls).toHaveLength(1);
+    expect(["127.0.0.1", "::1"]).toContain(whoisCalls[0] ?? "");
+  });
+
+  test("with Tailscale: ts_* are recorded and ts_user is tagged, but name / os do not come from Tailscale", async () => {
     whoisResult = tailnet;
+    await fetch(`${base}/register?devicetoken=t9&key=`, { headers: barkHeaders });
+    const d = (await store.devices.read())["NEWKEY"];
+    expect(d?.info).toEqual({ ...observed, ...tailnet });
+    expect(d?.tags).toEqual({ name: "iphone", os: "ios", lang: "ja", ts_user: "user@example.com" });
+  });
+
+  test("/r/:token/register: invite tags win over auto tags; the client the invite page sent goes to info and decides name / os", async () => {
     const inv = await createInvite({ owner: "kawaz", name: "phone" });
     const safari = "Mozilla/5.0 (iPhone; CPU iPhone OS 26_7_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1";
     const { token } = await openAdd(inv.invite);
@@ -745,7 +754,7 @@ describe("device info and auto tags on register", () => {
 
     await fetch(`${base}/r/${token}/register?devicetoken=tok&key=`, { headers: barkHeaders });
     const d = (await store.devices.read())["NEWKEY"];
-    expect(d?.tags).toEqual({ owner: "kawaz", name: "phone", os: "ios", lang: "ja", ts_user: "user@example.com" });
+    expect(d?.tags).toEqual({ owner: "kawaz", name: "phone", os: "ios", lang: "ja" });
     expect(d?.info).toEqual({
       ...observed,
       device_kind: "iphone",
@@ -760,25 +769,23 @@ describe("device info and auto tags on register", () => {
     await post("/bark-admin/api/devices/NEWKEY", { tags: { owner: "kawaz", name: "renamed" } }, "PATCH");
     await fetch(`${base}/r/${token}/register?devicetoken=tok2&key=NEWKEY`, { headers: barkHeaders });
     const again = (await store.devices.read())["NEWKEY"];
-    expect(again?.tags).toEqual({ owner: "kawaz", name: "renamed", os: "ios", lang: "ja", ts_user: "user@example.com" });
+    expect(again?.tags).toEqual({ owner: "kawaz", name: "renamed", os: "ios", lang: "ja" });
     expect(again?.info?.device_kind).toBe("iphone");
   });
 
-  test("an iPad (desktop Safari, localhost Hostname): name from ComputedName, os ipados; re-registering does not overwrite name / os", async () => {
-    whoisResult = { ts_name: "ipad-pro-12-9-gen-5.tail0000.ts.net", ts_machine: "ipad-pro-12-9-gen-5", ts_hostname: "localhost", ts_os: "iOS", ts_ip: "100.84.237.16" };
+  test("an iPad (desktop Safari, the Bark UA says iOS): name ipad, os ipados; re-registering does not overwrite name / os", async () => {
     const { token } = await openAdd((await createInvite({ owner: "kawaz" })).invite);
     const mac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
     await post(`/bark-admin/api/registrations/${token}/client`, { user_agent: mac, platform: "MacIntel", max_touch_points: 5, language: "ja-JP", screen: { w: 1024, h: 1366, dpr: 2 } });
-    await fetch(`${base}/r/${token}/register?devicetoken=tok&key=IPAD`, { headers: { ...barkHeaders, "x-forwarded-for": "100.84.237.16" } });
+    await fetch(`${base}/r/${token}/register?devicetoken=tok&key=IPAD`, { headers: barkHeaders });
     const d = (await store.devices.read())["IPAD"];
-    expect(d?.tags).toEqual({ owner: "kawaz", name: "ipad-pro-12-9-gen-5", os: "ipados", lang: "ja" });
-    expect(d?.info).toMatchObject({ device_kind: "ipad", ts_machine: "ipad-pro-12-9-gen-5", ts_hostname: "localhost", browser_screen: "1024x1366@2" });
+    expect(d?.tags).toEqual({ owner: "kawaz", name: "ipad", os: "ipados", lang: "ja" });
+    expect(d?.info).toMatchObject({ device_kind: "ipad", os_version: "iOS 26.7.1", browser_screen: "1024x1366@2" });
 
-    // 人が name / os を直した後の再登録 (マシン名が変わっても) で、自動タグは上書きしない
-    await post("/bark-admin/api/devices/IPAD", { tags: { owner: "kawaz", name: "ipad", os: "ios" } }, "PATCH");
-    whoisResult = { ...whoisResult, ts_machine: "renamed-machine" };
-    await fetch(`${base}/r/${token}/register?devicetoken=tok2&key=IPAD`, { headers: { ...barkHeaders, "x-forwarded-for": "100.84.237.16" } });
-    expect((await store.devices.read())["IPAD"]?.tags).toEqual({ owner: "kawaz", name: "ipad", os: "ios", lang: "ja" });
+    // 人が name / os を直した後の再登録で、自動タグは上書きしない
+    await post("/bark-admin/api/devices/IPAD", { tags: { owner: "kawaz", name: "kawaz-ipad", os: "ios" } }, "PATCH");
+    await fetch(`${base}/r/${token}/register?devicetoken=tok2&key=IPAD`, { headers: barkHeaders });
+    expect((await store.devices.read())["IPAD"]?.tags).toEqual({ owner: "kawaz", name: "kawaz-ipad", os: "ios", lang: "ja" });
   });
 
   test("POST …/client validates the body and needs a known token", async () => {
