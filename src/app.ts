@@ -11,6 +11,13 @@ import { CreateInviteSchema, PatchDeviceSchema, TagsSchema, type DeviceRecord, t
 import type { Store } from "./store.ts";
 import { localIso } from "./time.ts";
 
+// URL は 2 面に分かれる:
+// - root: bark-server 互換面。全 endpoint をそのまま bark-server へ透過する (`/r/<invite>/*` は prefix を剥がして透過)。
+//   中身を見るのは /register の応答を登録簿へ写す 1 点だけ
+// - /bark-admin/: 管理面 (UI / 管理 API / タグ宛先の送信 API)
+
+export const ADMIN = "/bark-admin";
+
 export type AppDeps = {
   serverUrl: string;
   store: Store;
@@ -20,15 +27,10 @@ export type AppDeps = {
 
 const PUBLIC_DIR = join(import.meta.dir, "..", "public");
 
-// /push の body: bark V2 パラメータ + 宛先指定。宛先は device (タグ filter) か device_key(s) の直指定。
-const PushEnvelopeSchema = v.looseObject({
-  device: v.optional(TagsSchema),
-  device_key: v.optional(v.string()),
-  // bark-server はカンマ区切り文字列も受けるので透過時はどちらも通す
-  device_keys: v.optional(v.union([v.array(v.string()), v.string()])),
-});
+// /bark-admin/push の body: bark V2 パラメータ (device_key / device_keys を除く) + device (タグ filter)
+const AdminPushEnvelopeSchema = v.looseObject({ device: v.optional(TagsSchema) });
 
-// register の要求側の key (再登録の判定用)。bark-server と同じく key / device_key の両方を見る
+// register の要求側の key (使用済み招待での再登録の判定用)。bark-server と同じく key / device_key の両方を見る
 const RegisterKeySchema = v.looseObject({ key: v.optional(v.string()), device_key: v.optional(v.string()) });
 
 function json(status: number, body: unknown): Response {
@@ -50,7 +52,7 @@ function barkError(status: number, message: string): Response {
 
 function inviteUrls(serverUrl: string, invite: string): { add_url: string; addserver_url: string } {
   return {
-    add_url: `${serverUrl}/add/${invite}`,
+    add_url: `${serverUrl}${ADMIN}/add/${invite}`,
     addserver_url: `bark://addserver?address=${serverUrl}/r/${invite}`,
   };
 }
@@ -85,82 +87,74 @@ export function createApp(deps: AppDeps) {
     }
   }
 
-  async function push(req: Request): Promise<Response> {
-    // body は常に JSON として読む (curl -d の既定 Content-Type が form でも送れるように Content-Type は見ない)
-    const env = parseJsonWith(PushEnvelopeSchema, await req.text());
-    if (!env.ok) return json(400, { error: env.error.message });
-    const { device, device_key, device_keys, ...rest } = env.value;
-    const params = parseWith(pushParamsSchema, rest);
-    if (!params.ok) return json(400, { error: params.error.message });
+  // ---------- bark-server 互換面 (root) ----------
 
-    return withUpstream(async () => {
-      if (device_key !== undefined || device_keys !== undefined) {
-        if (device !== undefined) return json(400, { error: "specify either device (tag filter) or device_key(s), not both" });
-        // bark 互換: 宛先もパラメータもそのまま bark-server に渡し、応答も丸ごと返す
-        const direct = {
-          ...params.value,
-          ...(device_key !== undefined ? { device_key } : {}),
-          ...(device_keys !== undefined ? { device_keys } : {}),
-        };
-        return upstreamResponse(await bark.forward("POST", "/push", "application/json; charset=utf-8", JSON.stringify(direct)));
-      }
-      const { deviceIds, skipped } = resolveTargets(await store.devices.read(), device ?? {});
-      if (deviceIds.length === 0) {
-        return json(404, { error: "no active device matches the device filter. Check GET /api/devices", sent: [], skipped });
-      }
-      const r = await bark.pushBatch(params.value, deviceIds);
-      if (!r.ok) return json(502, { error: r.message, upstream_status: r.status });
-      return json(200, { sent: r.results, skipped });
-    });
-  }
-
-  async function register(req: Request, invite: string | null): Promise<Response> {
+  // path (bark-server 側のパス) で bark-server へ透過する。/register だけは応答を登録簿へ写す。
+  // invite は /r/<invite>/* 経由のときの招待。
+  async function passThrough(req: Request, path: string, invite: string | null): Promise<Response> {
     const url = new URL(req.url);
     const contentType = req.headers.get("content-type");
     const body = await req.arrayBuffer();
+    const isRegister = path === "/register";
 
     let inviteTags: Tags = {};
     let inviteUnused = false;
     if (invite !== null) {
       const rec = (await store.invites.read())[invite];
       if (rec === undefined) return barkError(404, "invite not found. Ask for a new invite link");
-      // URL に招待が入ったサーバはアプリ起動のたびに同じ URL で再登録してくるので、
-      // 使用済みの招待でも、使った本人 (used_by) の key での再登録は通す
-      if (rec.used_by !== null && requestedKey(url, contentType, body) !== rec.used_by) {
-        return barkError(410, "invite already used. Ask for a new invite link");
+      if (isRegister) {
+        // アプリは起動のたびに追加済みサーバへ同じ URL で再登録してくるので、
+        // 使用済みの招待でも、使った本人 (used_by) の key での再登録は通す
+        if (rec.used_by !== null && requestedKey(url, contentType, body) !== rec.used_by) {
+          return barkError(410, "invite already used. Ask for a new invite link");
+        }
+        inviteTags = rec.tags;
+        inviteUnused = rec.used_by === null;
       }
-      inviteTags = rec.tags;
-      inviteUnused = rec.used_by === null;
     }
 
     return withUpstream(async () => {
-      const up = await bark.forward(req.method, `/register${url.search}`, contentType, body);
-      const reg = up.status === 200 ? parseJsonWith(RegisterResponseSchema, up.body) : null;
-      if (reg?.ok && reg.value.code === 200) {
-        const deviceId = reg.value.data.device_key;
-        const deviceToken = reg.value.data.device_token;
-        const at = now();
-        await store.devices.update((cur) => {
-          const { devices } = upsertRegistration(cur, { deviceId, deviceToken, tags: inviteTags, now: at });
-          return { next: devices, result: null };
-        });
-        if (invite !== null && inviteUnused) {
-          await store.invites.update((cur) => {
-            const rec = cur[invite];
-            if (rec === undefined || rec.used_by !== null) return { result: null };
-            return { next: { ...cur, [invite]: { ...rec, used_by: deviceId } }, result: null };
-          });
-        }
+      const up = await bark.forward(req.method, `${path}${url.search}`, contentType, body);
+      if (isRegister && up.status === 200) {
+        const reg = parseJsonWith(RegisterResponseSchema, up.body);
+        if (reg.ok && reg.value.code === 200) await recordRegistration(reg.value.data.device_key, reg.value.data.device_token, inviteTags, invite, inviteUnused);
       }
       return upstreamResponse(up);
     });
   }
 
-  async function ping(invite: string | null): Promise<Response> {
-    if (invite !== null && (await store.invites.read())[invite] === undefined) {
-      return barkError(404, "invite not found. Ask for a new invite link");
+  async function recordRegistration(deviceId: string, deviceToken: string, tags: Tags, invite: string | null, inviteUnused: boolean) {
+    const at = now();
+    await store.devices.update((cur) => ({ next: upsertRegistration(cur, { deviceId, deviceToken, tags, now: at }).devices, result: null }));
+    if (invite !== null && inviteUnused) {
+      await store.invites.update((cur) => {
+        const rec = cur[invite];
+        if (rec === undefined || rec.used_by !== null) return { result: null };
+        return { next: { ...cur, [invite]: { ...rec, used_by: deviceId } }, result: null };
+      });
     }
-    return withUpstream(async () => upstreamResponse(await bark.forward("GET", "/ping", null, null)));
+  }
+
+  // ---------- 管理面 (/bark-admin/) ----------
+
+  async function adminPush(req: Request): Promise<Response> {
+    // body は常に JSON として読む (curl -d の既定 Content-Type が form でも送れるように Content-Type は見ない)
+    const env = parseJsonWith(AdminPushEnvelopeSchema, await req.text());
+    if (!env.ok) return json(400, { error: env.error.message });
+    const { device, ...rest } = env.value;
+    // device_key / device_keys は pushParamsSchema に無いのでここで 400 になる (宛先は device で指定する)
+    const params = parseWith(pushParamsSchema, rest);
+    if (!params.ok) return json(400, { error: params.error.message });
+
+    const { deviceIds, skipped } = resolveTargets(await store.devices.read(), device ?? {});
+    if (deviceIds.length === 0) {
+      return json(404, { error: `no active device matches the device filter. Check GET ${ADMIN}/api/devices`, sent: [], skipped });
+    }
+    return withUpstream(async () => {
+      const r = await bark.pushBatch(params.value, deviceIds);
+      if (!r.ok) return json(502, { error: r.message, upstream_status: r.status });
+      return json(200, { sent: r.results, skipped });
+    });
   }
 
   async function listDevices(req: Request): Promise<Response> {
@@ -212,49 +206,47 @@ export function createApp(deps: AppDeps) {
   }
 
   const assets = Object.fromEntries(
-    readdirSync(join(PUBLIC_DIR, "assets")).map((name) => [`/assets/${name}`, new Response(Bun.file(join(PUBLIC_DIR, "assets", name)))]),
+    readdirSync(join(PUBLIC_DIR, "assets")).map((name) => [`${ADMIN}/assets/${name}`, new Response(Bun.file(join(PUBLIC_DIR, "assets", name)))]),
   );
 
   const routes = {
-    "/": new Response(Bun.file(join(PUBLIC_DIR, "index.html"))),
-    "/devices/:id": new Response(Bun.file(join(PUBLIC_DIR, "device.html"))),
+    "/": Response.redirect(`${ADMIN}/`, 302),
+    [ADMIN]: Response.redirect(`${ADMIN}/`, 302),
+    [`${ADMIN}/`]: new Response(Bun.file(join(PUBLIC_DIR, "index.html"))),
+    [`${ADMIN}/devices/:id`]: new Response(Bun.file(join(PUBLIC_DIR, "device.html"))),
     ...assets,
-
-    "/push": { POST: push },
-    "/ping": { GET: () => ping(null) },
-    "/healthz": { GET: () => withUpstream(async () => upstreamResponse(await bark.forward("GET", "/healthz", null, null))) },
-    "/register": { GET: (req: Request) => register(req, null), POST: (req: Request) => register(req, null) },
-    "/r/:invite/ping": { GET: (req: Bun.BunRequest<"/r/:invite/ping">) => ping(req.params.invite) },
-    "/r/:invite/register": {
-      GET: (req: Bun.BunRequest<"/r/:invite/register">) => register(req, req.params.invite),
-      POST: (req: Bun.BunRequest<"/r/:invite/register">) => register(req, req.params.invite),
-    },
-    "/add/:invite": { GET: (req: Bun.BunRequest<"/add/:invite">) => addPage(req.params.invite) },
-
-    "/api/schema": { GET: () => json(200, { fields: pushParamFields }) },
-    "/api/devices": { GET: listDevices },
-    "/api/devices/:id": {
-      GET: async (req: Bun.BunRequest<"/api/devices/:id">) => {
+    [`${ADMIN}/add/:invite`]: { GET: (req: Bun.BunRequest<"/bark-admin/add/:invite">) => addPage(req.params.invite) },
+    [`${ADMIN}/push`]: { POST: adminPush },
+    [`${ADMIN}/api/schema`]: { GET: () => json(200, { fields: pushParamFields }) },
+    [`${ADMIN}/api/devices`]: { GET: listDevices },
+    [`${ADMIN}/api/devices/:id`]: {
+      GET: async (req: Bun.BunRequest<"/bark-admin/api/devices/:id">) => {
         const rec = (await store.devices.read())[req.params.id];
         return rec === undefined ? json(404, { error: `device ${req.params.id} not found` }) : json(200, { device_id: req.params.id, ...rec });
       },
-      PATCH: async (req: Bun.BunRequest<"/api/devices/:id">) => {
+      PATCH: async (req: Bun.BunRequest<"/bark-admin/api/devices/:id">) => {
         const r = parseJsonWith(PatchDeviceSchema, await req.text());
         if (!r.ok) return json(400, { error: r.error.message });
         return updateDevice(req.params.id, (rec) => patchDevice(rec, r.value));
       },
-      DELETE: (req: Bun.BunRequest<"/api/devices/:id">) => {
+      DELETE: (req: Bun.BunRequest<"/bark-admin/api/devices/:id">) => {
         const at = now();
         return updateDevice(req.params.id, (rec) => archiveDevice(rec, at));
       },
     },
-    "/api/invites": { POST: createInvite },
-    "/api/invites/:invite/qr.svg": { GET: (req: Bun.BunRequest<"/api/invites/:invite/qr.svg">) => inviteQr(req.params.invite) },
+    [`${ADMIN}/api/invites`]: { POST: createInvite },
+    [`${ADMIN}/api/invites/:invite/qr.svg`]: {
+      GET: (req: Bun.BunRequest<"/bark-admin/api/invites/:invite/qr.svg">) => inviteQr(req.params.invite),
+    },
   };
 
-  // bark の URL 形式 (/<key>/<body> 等) を含め、上に無いパスは透過せず 404
-  function fallback(): Response {
-    return json(404, { error: "not found. Send notifications with POST /push" });
+  // routes に無いパス: /bark-admin/ 配下は 404、それ以外 (root) は bark-server 互換面として透過
+  function fallback(req: Request): Promise<Response> | Response {
+    const { pathname } = new URL(req.url);
+    if (pathname.startsWith(`${ADMIN}/`)) return json(404, { error: `not found. The admin UI is at ${ADMIN}/` });
+    const m = /^\/r\/([^/]+)(\/.*)?$/.exec(pathname);
+    if (m?.[1] !== undefined) return passThrough(req, m[2] ?? "/", m[1]);
+    return passThrough(req, pathname, null);
   }
 
   return { routes, fetch: fallback };

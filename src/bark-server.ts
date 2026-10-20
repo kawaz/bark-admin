@@ -44,7 +44,8 @@ export class BarkServer {
       res = await fetch(`${this.baseUrl}${pathAndQuery}`, {
         method,
         headers: contentType === null ? {} : { "content-type": contentType },
-        ...(body === null ? {} : { body }),
+        // GET / HEAD に body は付けられない。空 body も付けない
+        ...(body === null || method === "GET" || method === "HEAD" || (typeof body !== "string" && body.byteLength === 0) ? {} : { body }),
       });
     } catch (e) {
       throw new UpstreamError(`bark-server ${this.baseUrl} unreachable: ${e instanceof Error ? e.message : "fetch failed"}`);

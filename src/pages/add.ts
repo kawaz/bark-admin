@@ -1,4 +1,4 @@
-// /add/:invite の案内ページ。QR から Safari で開かれ、Bark アプリにサーバ (招待入り URL) を追加させる。
+// /bark-admin/add/:invite の案内ページ。QR から Safari で開かれ、Bark アプリにサーバ (招待入り URL) を追加させる。
 
 export const APP_STORE_URL = "https://apps.apple.com/app/bark-custom-notifications/id1403753865";
 
@@ -22,7 +22,7 @@ export function addPageHtml(p: { addserverUrl: string; tags: Record<string, stri
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>bark-admin: デバイス追加</title>
-<link rel="stylesheet" href="/assets/style.css">
+<link rel="stylesheet" href="/bark-admin/assets/style.css">
 </head>
 <body>
 <main class="narrow">
@@ -39,7 +39,7 @@ export function notFoundPageHtml(message: string): string {
   return `<!doctype html>
 <html lang="ja">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>bark-admin</title>
-<link rel="stylesheet" href="/assets/style.css"></head>
+<link rel="stylesheet" href="/bark-admin/assets/style.css"></head>
 <body><main class="narrow"><h1>見つかりません</h1><p>${esc(message)}</p></main></body>
 </html>
 `;

@@ -28,7 +28,7 @@ async function loadDevices() {
   }
   const q = new URLSearchParams(filter);
   if ($("#show-archived").checked) q.set("archived", "1");
-  const res = await fetch(`/api/devices?${q}`);
+  const res = await fetch(`/bark-admin/api/devices?${q}`);
   if (!res.ok) {
     $("#device-count").textContent = await errorMessage(res);
     return;
@@ -43,7 +43,7 @@ async function loadDevices() {
       const row = el(
         "tr",
         {},
-        el("td", {}, el("a", { href: `/devices/${encodeURIComponent(d.device_id)}`, textContent: d.device_id })),
+        el("td", {}, el("a", { href: `/bark-admin/devices/${encodeURIComponent(d.device_id)}`, textContent: d.device_id })),
         el("td", { textContent: owner }),
         el("td", { textContent: name }),
         el("td", {}, ...chips),
@@ -76,7 +76,7 @@ function fieldInput(f) {
 }
 
 async function renderPushForm() {
-  const res = await fetch("/api/schema");
+  const res = await fetch("/bark-admin/api/schema");
   const { fields } = await res.json();
   const groups = Map.groupBy(fields, (f) => f.group);
   $("#push-fields").replaceChildren(
@@ -128,7 +128,7 @@ async function main() {
       return;
     }
     const body = { ...collectParams(ev.target, fields), ...(Object.keys(filter).length > 0 ? { device: filter } : {}) };
-    const res = await fetch("/push", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const res = await fetch("/bark-admin/push", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     out.textContent = `${res.status}\n${await res.text()}`;
   });
 
@@ -141,13 +141,13 @@ async function main() {
       alert(e.message);
       return;
     }
-    const res = await fetch("/api/invites", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tags }) });
+    const res = await fetch("/bark-admin/api/invites", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tags }) });
     if (!res.ok) {
       alert(await errorMessage(res));
       return;
     }
     const inv = await res.json();
-    $("#invite-qr").src = `/api/invites/${encodeURIComponent(inv.invite)}/qr.svg`;
+    $("#invite-qr").src = `/bark-admin/api/invites/${encodeURIComponent(inv.invite)}/qr.svg`;
     $("#invite-add-url").href = inv.add_url;
     $("#invite-add-url").textContent = inv.add_url;
     $("#invite-addserver-url").href = inv.addserver_url;

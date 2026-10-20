@@ -2,7 +2,7 @@ import { errorMessage, formatTagLines, parseTagLines } from "./common.js";
 
 const $ = (sel) => document.querySelector(sel);
 const id = decodeURIComponent(location.pathname.split("/").at(-1));
-const api = `/api/devices/${encodeURIComponent(id)}`;
+const api = `/bark-admin/api/devices/${encodeURIComponent(id)}`;
 
 function render(d) {
   $("#detail").hidden = false;

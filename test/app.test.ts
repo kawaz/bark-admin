@@ -38,7 +38,7 @@ const fakeBark = Bun.serve({
         timestamp: ts,
       });
     }
-    return new Response("not found", { status: 404 });
+    return Response.json({ code: 200, message: "echo", timestamp: ts }, { headers: { "x-fake": "1" } });
   },
 });
 
@@ -86,9 +86,9 @@ function pushedKeys(): string[][] {
     });
 }
 
-describe("POST /push", () => {
+describe("POST /bark-admin/push", () => {
   test("device filter resolves active devices and sends one batch with device_keys", async () => {
-    const res = await post("/push", { device: { owner: "kawaz" }, title: "t", body: "b" });
+    const res = await post("/bark-admin/push", { device: { owner: "kawaz" }, title: "t", body: "b" });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ sent: [{ device_id: "A", status: 200 }, { device_id: "B", status: 200 }], skipped: 1 });
     expect(pushedKeys()).toEqual([["A", "B"]]);
@@ -97,56 +97,45 @@ describe("POST /push", () => {
   });
 
   test("filter is AND of exact matches", async () => {
-    await post("/push", { device: { owner: "kawaz", name: "ipad" }, body: "b" });
+    await post("/bark-admin/push", { device: { owner: "kawaz", name: "ipad" }, body: "b" });
     expect(pushedKeys()).toEqual([["B"]]);
   });
 
   test("no device filter = all active devices", async () => {
-    await post("/push", { body: "b" });
+    await post("/bark-admin/push", { body: "b" });
     expect(pushedKeys()).toEqual([["A", "B", "C"]]);
   });
 
   test("no match returns 404 without calling bark-server", async () => {
-    const res = await post("/push", { device: { owner: "nobody" }, body: "b" });
+    const res = await post("/bark-admin/push", { device: { owner: "nobody" }, body: "b" });
     expect(res.status).toBe(404);
     expect(received).toHaveLength(0);
   });
 
   test("per-device failure is reported in sent", async () => {
     await store.devices.update((cur) => ({ next: { ...cur, BAD: { device_token: "x", registered_at: "t0", archived_at: null, tags: { owner: "z" } } }, result: null }));
-    const res = await post("/push", { device: { owner: "z" }, body: "b" });
+    const res = await post("/bark-admin/push", { device: { owner: "z" }, body: "b" });
     expect(await res.json()).toEqual({ sent: [{ device_id: "BAD", status: 400, message: "failed to get device token" }], skipped: 0 });
   });
 
-  test("device_key is passed through as-is with the bark-server response", async () => {
-    const res = await post("/push", { device_key: "ZZZ", body: "b" });
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ code: 200, message: "success", timestamp: 1 });
-    const sent = received.find((r) => r.path === "/push");
-    expect(sent && JSON.parse(sent.body)).toEqual({ body: "b", device_key: "ZZZ" });
-  });
-
-  test("device_keys is passed through as-is", async () => {
-    await post("/push", { device_keys: ["X", "Y"], body: "b" });
-    expect(pushedKeys()).toEqual([["X", "Y"]]);
-  });
-
-  test("device and device_key together is rejected", async () => {
-    expect((await post("/push", { device: { owner: "kawaz" }, device_key: "X" })).status).toBe(400);
+  test("device_key / device_keys are rejected (destinations are given by device)", async () => {
+    expect((await post("/bark-admin/push", { device_key: "X", body: "b" })).status).toBe(400);
+    expect((await post("/bark-admin/push", { device_keys: ["X"], body: "b" })).status).toBe(400);
+    expect(received).toHaveLength(0);
   });
 
   test("invalid params are rejected before bark-server", async () => {
-    const res = await post("/push", { body: "b", level: "loud" });
+    const res = await post("/bark-admin/push", { body: "b", level: "loud" });
     expect(res.status).toBe(400);
     expect(received).toHaveLength(0);
   });
 });
 
 describe("devices API", () => {
-  test("GET /api/devices is jsonl of active devices, filterable, archived=1 includes archived", async () => {
+  test("GET /bark-admin/api/devices is jsonl of active devices, filterable, archived=1 includes archived", async () => {
     const IdSchema = v.object({ device_id: v.string() });
     const ids = async (q: string) => {
-      const res = await fetch(`${base}/api/devices${q}`);
+      const res = await fetch(`${base}/bark-admin/api/devices${q}`);
       expect(res.headers.get("content-type")).toContain("application/jsonl");
       return (await res.text())
         .split("\n")
@@ -162,33 +151,33 @@ describe("devices API", () => {
   });
 
   test("PATCH replaces tags, DELETE archives, PATCH archived_at null restores", async () => {
-    expect(await (await post("/api/devices/A", { tags: { owner: "x" } }, "PATCH")).json()).toMatchObject({ device_id: "A", tags: { owner: "x" } });
-    expect(await (await fetch(`${base}/api/devices/A`, { method: "DELETE" })).json()).toMatchObject({ archived_at: "NOW" });
+    expect(await (await post("/bark-admin/api/devices/A", { tags: { owner: "x" } }, "PATCH")).json()).toMatchObject({ device_id: "A", tags: { owner: "x" } });
+    expect(await (await fetch(`${base}/bark-admin/api/devices/A`, { method: "DELETE" })).json()).toMatchObject({ archived_at: "NOW" });
     expect((await store.devices.read())["A"]?.archived_at).toBe("NOW");
-    expect(await (await post("/api/devices/A", { archived_at: null }, "PATCH")).json()).toMatchObject({ archived_at: null });
+    expect(await (await post("/bark-admin/api/devices/A", { archived_at: null }, "PATCH")).json()).toMatchObject({ archived_at: null });
   });
 
   test("unknown device is 404", async () => {
-    expect((await fetch(`${base}/api/devices/NOPE`)).status).toBe(404);
-    expect((await fetch(`${base}/api/devices/NOPE`, { method: "DELETE" })).status).toBe(404);
+    expect((await fetch(`${base}/bark-admin/api/devices/NOPE`)).status).toBe(404);
+    expect((await fetch(`${base}/bark-admin/api/devices/NOPE`, { method: "DELETE" })).status).toBe(404);
   });
 });
 
 describe("register via invite", () => {
   async function invite(tags: Record<string, string>) {
-    const res = await post("/api/invites", { tags });
+    const res = await post("/bark-admin/api/invites", { tags });
     expect(res.status).toBe(201);
     return v.parse(v.object({ invite: v.string(), add_url: v.string(), addserver_url: v.string() }), await res.json());
   }
 
   test("invite URLs embed the invite in the server address", async () => {
     const inv = await invite({ owner: "kawaz" });
-    expect(inv.add_url).toBe(`https://bark.example/add/${inv.invite}`);
+    expect(inv.add_url).toBe(`https://bark.example/bark-admin/add/${inv.invite}`);
     expect(inv.addserver_url).toBe(`bark://addserver?address=https://bark.example/r/${inv.invite}`);
-    const page = await (await fetch(`${base}/add/${inv.invite}`)).text();
+    const page = await (await fetch(`${base}/bark-admin/add/${inv.invite}`)).text();
     expect(page).toContain(`bark://addserver?address=https://bark.example/r/${inv.invite}`);
     expect(page).toContain("https://apps.apple.com/app/bark-custom-notifications/id1403753865");
-    const qr = await fetch(`${base}/api/invites/${inv.invite}/qr.svg`);
+    const qr = await fetch(`${base}/bark-admin/api/invites/${inv.invite}/qr.svg`);
     expect(qr.headers.get("content-type")).toBe("image/svg+xml");
   });
 
@@ -214,7 +203,7 @@ describe("register via invite", () => {
   test("unknown invite is 404 for ping, register and the add page", async () => {
     expect((await fetch(`${base}/r/nope/ping`)).status).toBe(404);
     expect((await fetch(`${base}/r/nope/register?devicetoken=t&key=`)).status).toBe(404);
-    expect((await fetch(`${base}/add/nope`)).status).toBe(404);
+    expect((await fetch(`${base}/bark-admin/add/nope`)).status).toBe(404);
     expect(received).toHaveLength(0);
   });
 
@@ -232,16 +221,49 @@ describe("register via invite", () => {
   });
 });
 
+describe("bark-server compatible surface (root)", () => {
+  test("/push is passed through as-is, device is not interpreted", async () => {
+    const res = await post("/push", { device: { owner: "kawaz" }, device_key: "ZZZ", body: "b" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ code: 200, message: "success", timestamp: 1 });
+    const sent = received.find((r) => r.path === "/push");
+    expect(sent && JSON.parse(sent.body)).toEqual({ device: { owner: "kawaz" }, device_key: "ZZZ", body: "b" });
+  });
+
+  test("any other bark-server endpoint (URL form, /info, query) is passed through", async () => {
+    expect((await fetch(`${base}/A/hello?sound=x`)).status).toBe(200);
+    expect((await fetch(`${base}/info`)).status).toBe(200);
+    expect((await fetch(`${base}/healthz`)).status).toBe(200);
+    expect(received.map((r) => `${r.method} ${r.path}${r.search}`)).toEqual(["GET /A/hello?sound=x", "GET /info", "GET /healthz"]);
+  });
+
+  test("/r/<invite>/* strips the prefix", async () => {
+    const inv = await (await post("/bark-admin/api/invites", { tags: {} })).text();
+    const id = v.parse(v.object({ invite: v.string() }), JSON.parse(inv)).invite;
+    await post(`/r/${id}/push`, { device_key: "X", body: "b" });
+    await fetch(`${base}/r/${id}`);
+    expect(received.map((r) => `${r.method} ${r.path}`)).toEqual(["POST /push", "GET /"]);
+  });
+});
+
 describe("routing", () => {
-  test("bark URL form /<key>/<body> is not forwarded", async () => {
-    expect((await fetch(`${base}/A/hello`)).status).toBe(404);
+  test("/ and /bark-admin redirect to /bark-admin/", async () => {
+    for (const p of ["/", "/bark-admin"]) {
+      const res = await fetch(`${base}${p}`, { redirect: "manual" });
+      expect(res.status).toBe(302);
+      expect(res.headers.get("location")).toBe("/bark-admin/");
+    }
+  });
+
+  test("unknown path under /bark-admin/ is 404, not forwarded", async () => {
+    expect((await fetch(`${base}/bark-admin/nope`)).status).toBe(404);
     expect(received).toHaveLength(0);
   });
 
-  test("schema endpoint and pages are served", async () => {
-    expect((await (await fetch(`${base}/api/schema`)).text())).toContain('"name":"title"');
-    expect((await fetch(`${base}/`)).headers.get("content-type")).toContain("text/html");
-    expect((await fetch(`${base}/devices/A`)).headers.get("content-type")).toContain("text/html");
-    expect((await fetch(`${base}/assets/index.js`)).status).toBe(200);
+  test("schema endpoint and pages are served under /bark-admin/", async () => {
+    expect(await (await fetch(`${base}/bark-admin/api/schema`)).text()).toContain('"name":"title"');
+    expect((await fetch(`${base}/bark-admin/`)).headers.get("content-type")).toContain("text/html");
+    expect((await fetch(`${base}/bark-admin/devices/A`)).headers.get("content-type")).toContain("text/html");
+    expect((await fetch(`${base}/bark-admin/assets/index.js`)).status).toBe(200);
   });
 });
