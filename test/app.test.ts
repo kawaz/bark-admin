@@ -7,7 +7,9 @@ import { createApp } from "../src/app.ts";
 import { BarkServer } from "../src/bark-server.ts";
 import type { TailnetInfo } from "../src/device-info.ts";
 import { parseJsonWith } from "../src/parse.ts";
-import { openStore, type Store } from "../src/store.ts";
+import { REGISTRATION_TTL_MS } from "../src/invites.ts";
+import { openStore, setAsideLegacyInvites, type Store } from "../src/store.ts";
+import { localIso } from "../src/time.ts";
 import { nodeDecrypt } from "./node-aes-gcm.ts";
 
 // 偽 bark-server: 届いた要求を記録し、bark-server v2.3.9 と同じ形で応答する
@@ -53,6 +55,10 @@ let dir: string;
 let store: Store;
 let server: ReturnType<typeof Bun.serve>;
 let base: string;
+// 時計 (登録トークンの期限を進めて試す)。NOW はその時刻の登録簿での表記
+const START = new Date("2026-10-20T12:00:00+09:00");
+let clock = START;
+const NOW = localIso(START);
 // 偽 tailscale whois: 引かれた IP を記録し、whoisResult を返す
 const whoisCalls: string[] = [];
 let whoisResult: TailnetInfo = {};
@@ -64,6 +70,7 @@ afterAll(() => {
 beforeEach(async () => {
   received.length = 0;
   whoisCalls.length = 0;
+  clock = START;
   whoisResult = {};
   dir = await mkdtemp(join(tmpdir(), "bark-admin-app-"));
   store = openStore(join(dir, "devices.json"));
@@ -77,7 +84,7 @@ beforeEach(async () => {
     result: null,
   }));
   const app = createApp({ serverUrl: "https://bark.example", store, bark: new BarkServer(fakeBark.url.origin),
-    now: () => "NOW",
+    now: () => clock,
     whois: async (ip) => {
       whoisCalls.push(ip);
       return whoisResult;
@@ -247,8 +254,8 @@ describe("devices API", () => {
 
   test("PATCH replaces tags, DELETE archives, PATCH archived_at null restores", async () => {
     expect(await (await post("/bark-admin/api/devices/A", { tags: { owner: "x" } }, "PATCH")).json()).toMatchObject({ device_id: "A", tags: { owner: "x" } });
-    expect(await (await fetch(`${base}/bark-admin/api/devices/A`, { method: "DELETE" })).json()).toMatchObject({ archived_at: "NOW" });
-    expect((await store.devices.read())["A"]?.archived_at).toBe("NOW");
+    expect(await (await fetch(`${base}/bark-admin/api/devices/A`, { method: "DELETE" })).json()).toMatchObject({ archived_at: NOW });
+    expect((await store.devices.read())["A"]?.archived_at).toBe(NOW);
     expect(await (await post("/bark-admin/api/devices/A", { archived_at: null }, "PATCH")).json()).toMatchObject({ archived_at: null });
   });
 
@@ -309,8 +316,8 @@ describe("devices API", () => {
     expect(ok.status).toBe(200);
     expect(ok.headers.get("content-type")).toContain("text/html");
     expect(await ok.text()).toContain("暗号化を確認できた");
-    expect((await store.devices.read())["A"]?.crypto).toEqual({ key: KEY_A, confirmed_at: "NOW", pending_nonce: null });
-    expect(await (await fetch(`${base}/bark-admin/api/devices/A`)).json()).toMatchObject({ crypto: { key: KEY_A, confirmed_at: "NOW" } });
+    expect((await store.devices.read())["A"]?.crypto).toEqual({ key: KEY_A, confirmed_at: NOW, pending_nonce: null });
+    expect(await (await fetch(`${base}/bark-admin/api/devices/A`)).json()).toMatchObject({ crypto: { key: KEY_A, confirmed_at: NOW } });
 
     // 同じ URL は 2 回目は効かない
     expect((await fetch(`${base}/bark-admin/api/devices/A/crypto/confirm/${nonce}`)).status).toBe(404);
@@ -348,81 +355,157 @@ describe("devices API", () => {
   });
 });
 
-describe("register via invite", () => {
-  async function invite(tags: Record<string, string>, encrypt?: boolean) {
-    const res = await post("/bark-admin/api/invites", { tags, ...(encrypt === undefined ? {} : { encrypt }) });
-    expect(res.status).toBe(201);
-    return v.parse(
-      v.object({ invite: v.string(), add_url: v.string(), addserver_url: v.string(), crypto: v.nullable(v.object({ key: v.string() })) }),
-      await res.json(),
-    );
-  }
+const InviteSchema = v.object({ invite: v.string(), add_url: v.string(), tags: v.record(v.string(), v.string()), encrypt: v.boolean(), note: v.optional(v.string()), created_at: v.string(), registered: v.number() });
 
-  test("encrypt: true puts a key on the invite, shows it on the add page and copies it to the registered device", async () => {
-    const inv = await invite({ name: "enc" }, true);
-    const key = inv.crypto?.key ?? "";
-    expect(key).toMatch(/^[A-Za-z0-9]{32}$/);
-    expect((await store.invites.read())[inv.invite]?.crypto).toEqual({ key });
-    const page = await (await fetch(`${base}/bark-admin/add/${inv.invite}`)).text();
-    expect(page).toContain("暗号化キー");
-    expect(page).toContain(key);
+async function createInvite(tags: Record<string, string>, opts: { encrypt?: boolean; note?: string } = {}) {
+  const res = await post("/bark-admin/api/invites", { tags, ...opts });
+  expect(res.status).toBe(201);
+  return v.parse(InviteSchema, await res.json());
+}
 
-    await fetch(`${base}/r/${inv.invite}/register?devicetoken=tok&key=`);
-    expect((await store.devices.read())["NEWKEY"]?.crypto).toEqual({ key, confirmed_at: null, pending_nonce: null });
-    // 使用済みの招待ページには鍵を出さない
-    expect(await (await fetch(`${base}/bark-admin/add/${inv.invite}`)).text()).not.toContain(key);
+// 招待ページを開く (= 登録トークンを 1 つ発行する)。ページに出た /r/<token> と鍵を返す
+async function openAdd(invite: string, headers: Record<string, string> = {}) {
+  const res = await fetch(`${base}/bark-admin/add/${invite}`, { headers });
+  expect(res.status).toBe(200);
+  const page = await res.text();
+  const token = /bark:\/\/addserver\?address=https:\/\/bark\.example\/r\/([A-Za-z0-9_-]+)/.exec(page)?.[1] ?? "";
+  expect(token).not.toBe("");
+  const key = /<code id="crypto-key" class="key">([A-Za-z0-9]{32})<\/code>/.exec(page)?.[1] ?? null;
+  return { token, key, page };
+}
+
+describe("invites and registration tokens", () => {
+  test("an invite is reusable: each add page opening issues a new token (and a new key), two tokens register two devices", async () => {
+    const inv = await createInvite({ owner: "kawaz", family: "kawazu" }, { encrypt: true, note: "for the family" });
+    expect(inv).toMatchObject({ add_url: `https://bark.example/bark-admin/add/${inv.invite}`, encrypt: true, note: "for the family", registered: 0 });
+    const first = await openAdd(inv.invite);
+    const second = await openAdd(inv.invite);
+    expect(first.token).not.toBe(second.token);
+    expect(first.key).toMatch(/^[A-Za-z0-9]{32}$/);
+    expect(second.key).toMatch(/^[A-Za-z0-9]{32}$/);
+    expect(first.key).not.toBe(second.key);
+    expect(first.page).toContain("暗号化キー");
+    expect((await store.registrations.read())[first.token]).toMatchObject({ invite: inv.invite, crypto: { key: first.key }, used_by: null, used_at: null });
+
+    expect((await fetch(`${base}/r/${first.token}/register?devicetoken=t1&key=E1`)).status).toBe(200);
+    expect((await fetch(`${base}/r/${second.token}/register?devicetoken=t2&key=E2`)).status).toBe(200);
+    const devices = await store.devices.read();
+    expect(devices["E1"]).toMatchObject({ tags: { owner: "kawaz", family: "kawazu" }, crypto: { key: first.key, confirmed_at: null } });
+    expect(devices["E2"]).toMatchObject({ tags: { owner: "kawaz", family: "kawazu" }, crypto: { key: second.key, confirmed_at: null } });
+    expect((await store.registrations.read())[first.token]).toMatchObject({ used_by: "E1", used_at: NOW });
+    // 招待は使っても残り、一覧に登録数が出る
+    const list = (await (await fetch(`${base}/bark-admin/api/invites`)).text()).split("\n").filter((l) => l !== "").map((l) => v.parse(InviteSchema, JSON.parse(l)));
+    expect(list).toEqual([{ ...inv, registered: 2 }]);
   });
 
-  test("without encrypt the invite has no key and the add page has no key section", async () => {
-    const inv = await invite({ name: "plain" });
-    expect(inv.crypto).toBeNull();
-    expect(await (await fetch(`${base}/bark-admin/add/${inv.invite}`)).text()).not.toContain("暗号化キー");
-    await fetch(`${base}/r/${inv.invite}/register?devicetoken=tok&key=`);
+  test("without encrypt the token has no key and the add page has no key section", async () => {
+    const inv = await createInvite({ name: "plain" });
+    const { token, key, page } = await openAdd(inv.invite);
+    expect(key).toBeNull();
+    expect(page).not.toContain("暗号化キー");
+    await fetch(`${base}/r/${token}/register?devicetoken=tok&key=`);
     expect((await store.devices.read())["NEWKEY"]?.crypto).toBeNull();
   });
 
-  test("invite URLs embed the invite in the server address", async () => {
-    const inv = await invite({ owner: "kawaz" });
-    expect(inv.add_url).toBe(`https://bark.example/bark-admin/add/${inv.invite}`);
-    expect(inv.addserver_url).toBe(`bark://addserver?address=https://bark.example/r/${inv.invite}`);
-    const page = await (await fetch(`${base}/bark-admin/add/${inv.invite}`)).text();
-    expect(page).toContain(`bark://addserver?address=https://bark.example/r/${inv.invite}`);
+  test("register via a token upserts the device with the invite tags; the same key re-registers, another key is 410", async () => {
+    const inv = await createInvite({ owner: "kawaz", name: "new" });
+    const { token } = await openAdd(inv.invite);
+    expect((await fetch(`${base}/r/${token}/ping`)).status).toBe(200);
+    const res = await fetch(`${base}/r/${token}/register?devicetoken=tok&key=`);
+    expect(res.status).toBe(200);
+    expect(received.at(-1)).toMatchObject({ method: "GET", path: "/register", search: "?devicetoken=tok&key=" });
+    expect((await store.devices.read())["NEWKEY"]).toEqual({ device_token: "tok", registered_at: NOW, archived_at: null, tags: { owner: "kawaz", name: "new" }, crypto: null, info: { last_register_at: NOW, user_agent: expect.any(String), browser_user_agent: expect.any(String) } });
+
+    // 使った本人の再登録 (アプリ起動時) は期限を過ぎても通り、token だけ更新される
+    clock = new Date(START.getTime() + REGISTRATION_TTL_MS + 1000);
+    expect((await fetch(`${base}/r/${token}/register?devicetoken=tok2&key=NEWKEY`)).status).toBe(200);
+    expect((await store.devices.read())["NEWKEY"]?.device_token).toBe("tok2");
+    expect((await fetch(`${base}/r/${token}/ping`)).status).toBe(200);
+
+    // 別の端末は使用済みトークンで登録できない
+    const before = received.length;
+    const gone = await fetch(`${base}/r/${token}/register?devicetoken=other&key=`);
+    expect(gone.status).toBe(410);
+    expect(await gone.json()).toMatchObject({ code: 410, message: expect.stringContaining("already used") });
+    expect(received).toHaveLength(before);
+  });
+
+  test("an expired unused token is 410 for register and ping; opening the page again gives a fresh one", async () => {
+    const inv = await createInvite({ name: "late" });
+    const { token } = await openAdd(inv.invite);
+    clock = new Date(START.getTime() + REGISTRATION_TTL_MS);
+    for (const path of ["register?devicetoken=t&key=", "ping"]) {
+      const res = await fetch(`${base}/r/${token}/${path}`);
+      expect(res.status).toBe(410);
+      expect(await res.json()).toMatchObject({ message: expect.stringContaining("expired") });
+    }
+    expect(received).toHaveLength(0);
+    // 新しいトークンを発行するときに期限切れの未使用トークンは捨てる
+    const fresh = await openAdd(inv.invite);
+    expect(Object.keys(await store.registrations.read())).toEqual([fresh.token]);
+    expect((await fetch(`${base}/r/${fresh.token}/register?devicetoken=t&key=`)).status).toBe(200);
+  });
+
+  test("a token copies its key to an existing device too (only when the token is used)", async () => {
+    const inv = await createInvite({ room: "living" }, { encrypt: true });
+    const { token, key } = await openAdd(inv.invite);
+    await fetch(`${base}/r/${token}/register?devicetoken=ta2&key=A`);
+    const a = (await store.devices.read())["A"];
+    expect(key).not.toBeNull();
+    expect(a?.crypto).toEqual({ key: key ?? "", confirmed_at: null, pending_nonce: null });
+    // 招待のタグが既存のタグより優先され、無いキーは足される
+    expect(a?.tags).toEqual({ owner: "kawaz", name: "iphone", room: "living" });
+    // 鍵を作り直したあとの再登録で、トークンの鍵に戻らない
+    await post("/bark-admin/api/devices/A", { crypto: { key: KEY_B } }, "PATCH");
+    await fetch(`${base}/r/${token}/register?devicetoken=ta3&key=A`);
+    expect((await store.devices.read())["A"]?.crypto?.key).toBe(KEY_B);
+  });
+
+  test("DELETE removes the invite: the add page and QR are 404, its unused tokens are gone, used ones keep working", async () => {
+    const inv = await createInvite({ name: "bye" });
+    const used = await openAdd(inv.invite);
+    const unused = await openAdd(inv.invite);
+    await fetch(`${base}/r/${used.token}/register?devicetoken=t&key=U1`);
+    expect((await fetch(`${base}/bark-admin/api/invites/${inv.invite}`, { method: "DELETE" })).status).toBe(204);
+    expect((await fetch(`${base}/bark-admin/add/${inv.invite}`)).status).toBe(404);
+    expect((await fetch(`${base}/bark-admin/api/invites/${inv.invite}/qr.svg`)).status).toBe(404);
+    expect((await fetch(`${base}/r/${unused.token}/register?devicetoken=t&key=`)).status).toBe(404);
+    expect((await fetch(`${base}/r/${used.token}/register?devicetoken=t2&key=U1`)).status).toBe(200);
+    expect(await (await fetch(`${base}/bark-admin/api/invites`)).text()).toBe("");
+    expect((await fetch(`${base}/bark-admin/api/invites/${inv.invite}`, { method: "DELETE" })).status).toBe(404);
+  });
+
+  test("invite URL and QR", async () => {
+    const inv = await createInvite({ owner: "kawaz" });
+    const { token, page } = await openAdd(inv.invite);
+    expect(page).toContain(`bark://addserver?address=https://bark.example/r/${token}`);
     expect(page).toContain("https://apps.apple.com/app/bark-custom-notifications/id1403753865");
     const qr = await fetch(`${base}/bark-admin/api/invites/${inv.invite}/qr.svg`);
     expect(qr.headers.get("content-type")).toBe("image/svg+xml");
   });
 
-  test("register is forwarded to bark-server and upserts the device with the invite tags, once", async () => {
-    const inv = await invite({ owner: "kawaz", name: "new" });
-    expect((await fetch(`${base}/r/${inv.invite}/ping`)).status).toBe(200);
-    const res = await fetch(`${base}/r/${inv.invite}/register?devicetoken=tok&key=`);
-    expect(res.status).toBe(200);
-    expect(received.at(-1)).toMatchObject({ method: "GET", path: "/register", search: "?devicetoken=tok&key=" });
-    expect((await store.devices.read())["NEWKEY"]).toEqual({ device_token: "tok", registered_at: "NOW", archived_at: null, tags: { owner: "kawaz", name: "new" }, crypto: null, info: { last_register_at: "NOW", user_agent: expect.any(String) } });
-    expect((await store.invites.read())[inv.invite]?.used_by).toBe("NEWKEY");
-
-    // 使った本人の再登録 (アプリ起動時) は通り、token だけ更新される
-    expect((await fetch(`${base}/r/${inv.invite}/register?devicetoken=tok2&key=NEWKEY`)).status).toBe(200);
-    expect((await store.devices.read())["NEWKEY"]?.device_token).toBe("tok2");
-
-    // 別の端末は使用済み招待で登録できない
-    const before = received.length;
-    expect((await fetch(`${base}/r/${inv.invite}/register?devicetoken=other&key=`)).status).toBe(410);
-    expect(received).toHaveLength(before);
-  });
-
-  test("unknown invite is 404 for ping, register and the add page", async () => {
+  test("unknown token is 404 for ping and register, unknown invite is 404 for the add page", async () => {
     expect((await fetch(`${base}/r/nope/ping`)).status).toBe(404);
     expect((await fetch(`${base}/r/nope/register?devicetoken=t&key=`)).status).toBe(404);
     expect((await fetch(`${base}/bark-admin/add/nope`)).status).toBe(404);
     expect(received).toHaveLength(0);
   });
 
+  test("an invites.json in the one-time invite format is set aside and the store starts empty", async () => {
+    await Bun.write(store.invites.path, JSON.stringify({ OLD: { tags: { owner: "kawaz" }, created_at: "t0", used_by: "A" } }));
+    const moved = await setAsideLegacyInvites(store, "STAMP");
+    expect(moved).toBe(join(dir, "invites.legacy-STAMP.json"));
+    expect(await store.invites.read()).toEqual({});
+    expect(await setAsideLegacyInvites(store, "STAMP2")).toBeNull();
+  });
+});
+
+describe("register", () => {
   test("plain /register adds an untagged device; existing key keeps its tags", async () => {
     await fetch(`${base}/register?devicetoken=t1&key=`);
     expect((await store.devices.read())["NEWKEY"]?.tags).toEqual({});
     await fetch(`${base}/register?devicetoken=t9&key=A`);
-    expect((await store.devices.read())["A"]).toEqual({ device_token: "t9", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, crypto: null, info: { last_register_at: "NOW", user_agent: expect.any(String) } });
+    expect((await store.devices.read())["A"]).toEqual({ device_token: "t9", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, crypto: null, info: { last_register_at: NOW, user_agent: expect.any(String) } });
   });
 
   test("bark-server errors are passed through without touching the registry", async () => {
@@ -436,7 +519,7 @@ describe("device info and auto tags on register", () => {
   const BARK_UA = "Bark/1.6.4 (me.fin.bark; build:8; iOS 26.7.1) Alamofire/5.10.2";
   const barkHeaders = { "user-agent": BARK_UA, "accept-language": "ja;q=1.0, en;q=0.9", "x-forwarded-for": "100.104.30.107" };
   const tailnet = { ts_name: "zunphone.tail0000.ts.net", ts_hostname: "zunPhone", ts_os: "iOS", ts_user: "user@example.com", ts_ip: "100.104.30.107" };
-  const observed = { bark_version: "1.6.4", bark_build: "8", os_version: "iOS 26.7.1", user_agent: BARK_UA, lang: "ja;q=1.0, en;q=0.9", ...tailnet, last_register_at: "NOW" };
+  const observed = { bark_version: "1.6.4", bark_build: "8", os_version: "iOS 26.7.1", user_agent: BARK_UA, lang: "ja;q=1.0, en;q=0.9", ...tailnet, last_register_at: NOW };
 
   test("plain /register records info and fills only missing tags with auto tags", async () => {
     whoisResult = tailnet;
@@ -459,27 +542,24 @@ describe("device info and auto tags on register", () => {
     expect((await store.devices.read())["NEWKEY"]?.tags).toEqual({ os: "ios" });
     // whois が何も返さなくても登録は通る
     expect((await fetch(`${base}/register?devicetoken=t2&key=`, { headers: barkHeaders })).status).toBe(200);
-    expect((await store.devices.read())["NEWKEY"]?.info).toMatchObject({ os_version: "iOS 26.7.1", last_register_at: "NOW" });
+    expect((await store.devices.read())["NEWKEY"]?.info).toMatchObject({ os_version: "iOS 26.7.1", last_register_at: NOW });
   });
 
-  test("/r/:invite/register: invite tags win over auto tags; the browser that opened the invite page goes to info", async () => {
+  test("/r/:token/register: invite tags win over auto tags; the browser that opened the invite page goes to info", async () => {
     whoisResult = tailnet;
-    const res = await post("/bark-admin/api/invites", { tags: { owner: "kawaz", name: "ipad" } });
-    const inv = v.parse(v.object({ invite: v.string() }), await res.json());
+    const inv = await createInvite({ owner: "kawaz", name: "ipad" });
     const safari = "Mozilla/5.0 (iPhone; CPU iPhone OS 26_7_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1";
-    await fetch(`${base}/bark-admin/add/${inv.invite}`, { headers: { "user-agent": safari, "sec-ch-ua-mobile": "?1" } });
-    expect((await store.invites.read())[inv.invite]?.browser).toEqual({ user_agent: safari, hints: { "sec-ch-ua-mobile": "?1" } });
+    const { token } = await openAdd(inv.invite, { "user-agent": safari, "sec-ch-ua-mobile": "?1" });
+    expect((await store.registrations.read())[token]?.browser).toEqual({ user_agent: safari, hints: { "sec-ch-ua-mobile": "?1" } });
 
-    await fetch(`${base}/r/${inv.invite}/register?devicetoken=tok&key=`, { headers: barkHeaders });
+    await fetch(`${base}/r/${token}/register?devicetoken=tok&key=`, { headers: barkHeaders });
     const d = (await store.devices.read())["NEWKEY"];
     expect(d?.tags).toEqual({ owner: "kawaz", name: "ipad", os: "ios", lang: "ja", ts_user: "user@example.com" });
     expect(d?.info).toEqual({ ...observed, browser_user_agent: safari, browser_hints: { "sec-ch-ua-mobile": "?1" } });
 
-    // 使用済みの招待ページを開いても browser は変わらない。再登録で人が直したタグは招待のタグに戻らない
-    await fetch(`${base}/bark-admin/add/${inv.invite}`, { headers: { "user-agent": "other" } });
-    expect((await store.invites.read())[inv.invite]?.browser?.user_agent).toBe(safari);
+    // 再登録で人が直したタグは招待のタグに戻らない。ブラウザの情報は写り続ける
     await post("/bark-admin/api/devices/NEWKEY", { tags: { owner: "kawaz", name: "renamed" } }, "PATCH");
-    await fetch(`${base}/r/${inv.invite}/register?devicetoken=tok2&key=NEWKEY`, { headers: barkHeaders });
+    await fetch(`${base}/r/${token}/register?devicetoken=tok2&key=NEWKEY`, { headers: barkHeaders });
     const again = (await store.devices.read())["NEWKEY"];
     expect(again?.tags).toEqual({ owner: "kawaz", name: "renamed", os: "ios", lang: "ja", ts_user: "user@example.com" });
     expect(again?.info?.browser_user_agent).toBe(safari);
@@ -509,9 +589,8 @@ describe("bark-server compatible surface (root)", () => {
     expect(received.map((r) => `${r.method} ${r.path}${r.search}`)).toEqual(["GET /A/hello?sound=x", "GET /info", "GET /healthz"]);
   });
 
-  test("/r/<invite>/* strips the prefix", async () => {
-    const inv = await (await post("/bark-admin/api/invites", { tags: {} })).text();
-    const id = v.parse(v.object({ invite: v.string() }), JSON.parse(inv)).invite;
+  test("/r/<token>/* strips the prefix", async () => {
+    const { token: id } = await openAdd((await createInvite({})).invite);
     await post(`/r/${id}/push`, { device_key: "X", body: "b" });
     await fetch(`${base}/r/${id}`);
     expect(received.map((r) => `${r.method} ${r.path}`)).toEqual(["POST /push", "GET /"]);

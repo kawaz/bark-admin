@@ -43,15 +43,22 @@ export function mergeTags(invite: Tags, existing: Tags, auto: Tags): Tags {
   return tags;
 }
 
-// bark-server が登録を受けた結果を写す。新規は crypto (招待の値) 付きで作り、既存は token を更新する。
-// tags は使う招待のタグ (再登録では空)、info は今回の観察値で丸ごと置き換え、自動タグは info から作る
+// bark-server が登録を受けた結果を写す。新規は作り、既存は token を更新する。
+// tags / crypto は登録トークンを使う登録でだけ渡す招待のタグと鍵 (再登録では空と null)。crypto は既存の端末にも写し、null なら既存の鍵を保つ。
+// info は今回の観察値で丸ごと置き換え、自動タグは info から作る
 export function upsertRegistration(
   devices: Devices,
   reg: { deviceId: string; deviceToken: string; tags: Tags; crypto: CryptoKeyOnly | null; info: DeviceInfo; autoTags: Tags; now: string },
 ): { devices: Devices; created: boolean } {
   const cur = devices[reg.deviceId];
   if (cur !== undefined) {
-    const next: DeviceRecord = { ...cur, device_token: reg.deviceToken, tags: mergeTags(reg.tags, cur.tags, reg.autoTags), info: reg.info };
+    const next: DeviceRecord = {
+      ...cur,
+      device_token: reg.deviceToken,
+      tags: mergeTags(reg.tags, cur.tags, reg.autoTags),
+      ...(reg.crypto === null ? {} : { crypto: freshCrypto(reg.crypto) }),
+      info: reg.info,
+    };
     return { devices: { ...devices, [reg.deviceId]: next }, created: false };
   }
   const rec: DeviceRecord = {

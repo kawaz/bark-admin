@@ -1,4 +1,4 @@
-// /bark-admin/add/:invite の案内ページと、暗号化の確認通知から開かれるページ。QR から iPhone の Safari で開かれ、Bark アプリにサーバ (招待入り URL) を追加させる。
+// /bark-admin/add/:invite の案内ページと、暗号化の確認通知から開かれるページ。QR から iPhone の Safari で開かれ、Bark アプリにサーバ (登録トークン入り URL) を追加させる。
 // 最初に目に入るのは「Bark で開く」、App Store はその下 (見た目の判断は docs/design/ui.md)。
 
 export const APP_STORE_URL = "https://apps.apple.com/app/bark-custom-notifications/id1403753865";
@@ -26,7 +26,7 @@ ${main}
 `;
 }
 
-// 鍵は Bark アプリの暗号化設定に手で貼る。使用済みの招待では見せない (鍵は登録した端末の詳細画面にある)
+// 鍵は Bark アプリの暗号化設定に手で貼る。ページを開くたびに端末ごとの新しい鍵になる (登録後は端末の詳細画面にある)
 function cryptoSection(key: string): string {
   return `<section class="crypto stack" aria-labelledby="crypto-heading">
 <h2 id="crypto-heading">暗号化キー</h2>
@@ -40,14 +40,7 @@ function cryptoSection(key: string): string {
 </section>`;
 }
 
-export function addPageHtml(p: { addserverUrl: string; tags: Record<string, string>; used: boolean; cryptoKey: string | null }): string {
-  if (p.used) {
-    return page(
-      "bark-admin: 使用済みの招待",
-      `<h1>この招待は使用済み</h1>
-<p>招待は 1 台に 1 回だけ使える。別の端末を追加するなら、管理画面で招待を作り直す。</p>`,
-    );
-  }
+export function addPageHtml(p: { addserverUrl: string; tags: Record<string, string>; cryptoKey: string | null }): string {
   const tags = Object.entries(p.tags)
     .map(([k, val]) => `<li class="tag">${esc(k)}=${esc(val)}</li>`)
     .join("");
@@ -56,7 +49,7 @@ export function addPageHtml(p: { addserverUrl: string; tags: Record<string, stri
     `<h1>Bark にこのサーバを追加</h1>
 <a class="button open" href="${esc(p.addserverUrl)}">Bark で開く</a>
 <div class="then">
-<p>Bark に切り替わったら、サーバの追加を確定する。この端末が${tags === "" ? "タグなしで" : "次のタグで"}登録される。</p>
+<p>Bark に切り替わったら、サーバの追加を確定する。この端末が${tags === "" ? "タグなしで" : "次のタグで"}登録される。「Bark で開く」はこのページを開いた 1 台だけ、24 時間まで使える。</p>
 ${tags === "" ? "" : `<ul class="tags">${tags}</ul>`}
 </div>
 ${p.cryptoKey === null ? "" : `${cryptoSection(p.cryptoKey)}\n`}<div class="install">

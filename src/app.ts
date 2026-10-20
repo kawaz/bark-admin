@@ -4,6 +4,7 @@ import QRCode from "qrcode";
 import * as v from "valibot";
 import { BarkServer, RegisterResponseSchema, UpstreamError, type PushResult } from "./bark-server.ts";
 import { autoTags, browserFromHeaders, forwardedIp, observeRegistration, tailscaleWhois, type TailnetInfo, type Whois } from "./device-info.ts";
+import { gateToken, issueRegistration } from "./invites.ts";
 import { addPageHtml, confirmedPageHtml, notFoundPageHtml } from "./pages/add.ts";
 import { parseJsonWith, parseWith } from "./parse.ts";
 import { encryptForBark, newCryptoIv, newCryptoKey, randomAlnum } from "./push-crypto.ts";
@@ -28,13 +29,14 @@ import {
   type DeviceRecord,
   type Devices,
   type InviteBrowser,
+  type InviteRecord,
   type Tags,
 } from "./schema/registry.ts";
 import type { Store } from "./store.ts";
 import { localIso } from "./time.ts";
 
 // URL は 2 面に分かれる:
-// - root: bark-server 互換面。全 endpoint をそのまま bark-server へ透過する (`/r/<invite>/*` は prefix を剥がして透過)。
+// - root: bark-server 互換面。全 endpoint をそのまま bark-server へ透過する (`/r/<token>/*` は登録トークンの prefix を剥がして透過)。
 //   中身を見るのは /register の応答を登録簿へ写す 1 点だけ
 // - /bark-admin/: 管理面 (UI / 管理 API / タグ宛先の送信 API)
 
@@ -44,7 +46,7 @@ export type AppDeps = {
   serverUrl: string;
   store: Store;
   bark: BarkServer;
-  now?: () => string;
+  now?: () => Date;
   // X-Forwarded-For の IP から tailnet の端末情報を引く (既定は tailscale whois)
   whois?: Whois;
 };
@@ -54,7 +56,7 @@ const PUBLIC_DIR = join(import.meta.dir, "..", "public");
 // /bark-admin/push の body: bark V2 パラメータ (device_key / device_keys を除く) + device (タグ filter)
 const AdminPushEnvelopeSchema = v.looseObject({ device: v.optional(TagsSchema) });
 
-// register の要求側の key (使用済み招待での再登録の判定用)。bark-server と同じく key / device_key の両方を見る
+// register の要求側の key (使用済みの登録トークンでの再登録の判定用)。bark-server と同じく key / device_key の両方を見る
 const RegisterKeySchema = v.looseObject({ key: v.optional(v.string()), device_key: v.optional(v.string()) });
 
 type ConfirmStart = { kind: "not-found" } | { kind: "no-key" } | { kind: "started"; key: string };
@@ -63,8 +65,8 @@ function json(status: number, body: unknown): Response {
   return Response.json(body, { status });
 }
 
-function html(status: number, body: string): Response {
-  return new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8" } });
+function html(status: number, body: string, headers: Record<string, string> = {}): Response {
+  return new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8", ...headers } });
 }
 
 function upstreamResponse(up: { status: number; contentType: string | null; body: string }): Response {
@@ -76,14 +78,17 @@ function barkError(status: number, message: string): Response {
   return json(status, { code: status, message, timestamp: Math.floor(Date.now() / 1000) });
 }
 
-function inviteUrls(serverUrl: string, invite: string): { add_url: string; addserver_url: string } {
-  return {
-    add_url: `${serverUrl}${ADMIN}/add/${invite}`,
-    addserver_url: `bark://addserver?address=${serverUrl}/r/${invite}`,
-  };
+// 招待の QR が指す案内ページ
+function addUrl(serverUrl: string, invite: string): string {
+  return `${serverUrl}${ADMIN}/add/${invite}`;
 }
 
-function newInviteId(): string {
+// 登録トークン入りのサーバ URL を Bark に追加させる
+function addserverUrl(serverUrl: string, token: string): string {
+  return `bark://addserver?address=${serverUrl}/r/${token}`;
+}
+
+function newId(): string {
   return Buffer.from(crypto.getRandomValues(new Uint8Array(12))).toString("base64url");
 }
 
@@ -102,7 +107,8 @@ function requestedKey(url: URL, contentType: string | null, body: ArrayBuffer): 
 
 export function createApp(deps: AppDeps) {
   const { store, bark, serverUrl } = deps;
-  const now = deps.now ?? (() => localIso());
+  const clock = deps.now ?? (() => new Date());
+  const now = () => localIso(clock());
   const whois = deps.whois ?? tailscaleWhois;
 
   async function withUpstream(fn: () => Promise<Response>): Promise<Response> {
@@ -117,32 +123,24 @@ export function createApp(deps: AppDeps) {
   // ---------- bark-server 互換面 (root) ----------
 
   // path (bark-server 側のパス) で bark-server へ透過する。/register だけは応答を登録簿へ写す。
-  // invite は /r/<invite>/* 経由のときの招待。
-  async function passThrough(req: Request, path: string, invite: string | null): Promise<Response> {
+  // token は /r/<token>/* 経由のときの登録トークン。
+  async function passThrough(req: Request, path: string, token: string | null): Promise<Response> {
     const url = new URL(req.url);
     const contentType = req.headers.get("content-type");
     const body = await req.arrayBuffer();
     const isRegister = path === "/register";
 
-    let inviteTags: Tags = {};
-    let inviteCrypto: CryptoKeyOnly | null = null;
-    let inviteBrowser: InviteBrowser | null = null;
-    let inviteUnused = false;
-    if (invite !== null) {
-      const rec = (await store.invites.read())[invite];
-      if (rec === undefined) return barkError(404, "invite not found. Ask for a new invite link");
-      if (isRegister) {
-        // アプリは起動のたびに追加済みサーバへ同じ URL で再登録してくるので、
-        // 使用済みの招待でも、使った本人 (used_by) の key での再登録は通す
-        if (rec.used_by !== null && requestedKey(url, contentType, body) !== rec.used_by) {
-          return barkError(410, "invite already used. Ask for a new invite link");
-        }
-        inviteUnused = rec.used_by === null;
-        // 招待のタグは招待を使う登録でだけ付ける (再登録で人が直したタグを戻さない)。ブラウザの情報は再登録でも写し続ける
-        if (inviteUnused) inviteTags = rec.tags;
-        inviteCrypto = rec.crypto;
-        inviteBrowser = rec.browser;
-      }
+    // 登録トークンを使う登録 (consume) でだけ招待のタグと鍵を写す (再登録で人が直したタグや作り直した鍵を戻さない)。ブラウザの情報は再登録でも写し続ける
+    let use: { token: string; tags: Tags; crypto: CryptoKeyOnly | null } | null = null;
+    let browser: InviteBrowser | null = null;
+    if (token !== null) {
+      const rec = (await store.registrations.read())[token];
+      if (rec === undefined) return barkError(404, "registration link not found. Open the invite page again");
+      const invite = (await store.invites.read())[rec.invite];
+      const gate = gateToken(rec, { isRegister, requestedKey: isRegister ? requestedKey(url, contentType, body) : "", inviteExists: invite !== undefined, now: clock() });
+      if (gate.kind === "gone") return barkError(410, gate.message);
+      if (gate.consume && invite !== undefined) use = { token, tags: invite.tags, crypto: rec.crypto };
+      browser = rec.browser;
     }
 
     // whois は bark-server の応答を待つ間に引いておく
@@ -154,8 +152,7 @@ export function createApp(deps: AppDeps) {
       if (isRegister && up.status === 200) {
         const reg = parseJsonWith(RegisterResponseSchema, up.body);
         if (reg.ok && reg.value.code === 200) {
-          const seen = { headers: req.headers, tailnet: await tailnet, browser: inviteBrowser };
-          await recordRegistration(reg.value.data.device_key, reg.value.data.device_token, inviteTags, inviteCrypto, seen, invite, inviteUnused);
+          await recordRegistration(reg.value.data.device_key, reg.value.data.device_token, use, { headers: req.headers, tailnet: await tailnet, browser });
         }
       }
       return upstreamResponse(up);
@@ -165,22 +162,19 @@ export function createApp(deps: AppDeps) {
   async function recordRegistration(
     deviceId: string,
     deviceToken: string,
-    tags: Tags,
-    crypto: CryptoKeyOnly | null,
+    use: { token: string; tags: Tags; crypto: CryptoKeyOnly | null } | null,
     seen: { headers: Headers; tailnet: TailnetInfo; browser: InviteBrowser | null },
-    invite: string | null,
-    inviteUnused: boolean,
   ) {
     const at = now();
     const info = observeRegistration({ ...seen, now: at });
-    await store.devices.update((cur) => ({ next: upsertRegistration(cur, { deviceId, deviceToken, tags, crypto, info, autoTags: autoTags(info), now: at }).devices, result: null }));
-    if (invite !== null && inviteUnused) {
-      await store.invites.update((cur) => {
-        const rec = cur[invite];
-        if (rec === undefined || rec.used_by !== null) return { result: null };
-        return { next: { ...cur, [invite]: { ...rec, used_by: deviceId } }, result: null };
-      });
-    }
+    const reg = { deviceId, deviceToken, tags: use?.tags ?? {}, crypto: use?.crypto ?? null, info, autoTags: autoTags(info), now: at };
+    await store.devices.update((cur) => ({ next: upsertRegistration(cur, reg).devices, result: null }));
+    if (use === null) return;
+    await store.registrations.update((cur) => {
+      const rec = cur[use.token];
+      if (rec === undefined || rec.used_by !== null) return { result: null };
+      return { next: { ...cur, [use.token]: { ...rec, used_by: deviceId, used_at: at } }, result: null };
+    });
   }
 
   // ---------- 管理面 (/bark-admin/) ----------
@@ -298,34 +292,53 @@ export function createApp(deps: AppDeps) {
   async function createInvite(req: Request): Promise<Response> {
     const r = parseJsonWith(CreateInviteSchema, await req.text());
     if (!r.ok) return json(400, { error: r.error.message });
-    const invite = newInviteId();
-    const createdAt = now();
-    const crypto: CryptoKeyOnly | null = r.value.encrypt ? { key: newCryptoKey() } : null;
-    await store.invites.update((cur) => ({
-      next: { ...cur, [invite]: { tags: r.value.tags, created_at: createdAt, used_by: null, crypto, browser: null } },
-      result: null,
-    }));
-    return json(201, { invite, ...inviteUrls(serverUrl, invite), crypto });
+    const invite = newId();
+    const rec: InviteRecord = { tags: r.value.tags, encrypt: r.value.encrypt, created_at: now(), ...(r.value.note === undefined || r.value.note === "" ? {} : { note: r.value.note }) };
+    await store.invites.update((cur) => ({ next: { ...cur, [invite]: rec }, result: null }));
+    return json(201, inviteView(invite, rec, 0));
+  }
+
+  // registered はこの招待から登録された端末の数 (使用済みの登録トークンの数)
+  function inviteView(invite: string, rec: InviteRecord, registered: number) {
+    return { invite, add_url: addUrl(serverUrl, invite), ...rec, registered };
+  }
+
+  async function listInvites(): Promise<Response> {
+    const [invites, regs] = await Promise.all([store.invites.read(), store.registrations.read()]);
+    const used = Object.values(regs).filter((t) => t.used_by !== null);
+    const body = Object.entries(invites)
+      .map(([id, rec]) => `${JSON.stringify(inviteView(id, rec, used.filter((t) => t.invite === id).length))}\n`)
+      .join("");
+    return new Response(body, { headers: { "content-type": "application/jsonl; charset=utf-8" } });
+  }
+
+  // 招待を消し、その招待の未使用の登録トークンも消す (使用済みは端末の再登録のために残す)
+  async function deleteInvite(invite: string): Promise<Response> {
+    const found = await store.invites.update((cur) => {
+      if (cur[invite] === undefined) return { result: false };
+      return { next: Object.fromEntries(Object.entries(cur).filter(([id]) => id !== invite)), result: true };
+    });
+    if (!found) return json(404, { error: `invite ${invite} not found` });
+    await store.registrations.update((cur) => ({ next: Object.fromEntries(Object.entries(cur).filter(([, t]) => t.invite !== invite || t.used_by !== null)), result: null }));
+    return new Response(null, { status: 204 });
   }
 
   async function inviteQr(invite: string): Promise<Response> {
     if ((await store.invites.read())[invite] === undefined) return json(404, { error: `invite ${invite} not found` });
-    const svg = await QRCode.toString(inviteUrls(serverUrl, invite).add_url, { type: "svg", margin: 2 });
+    const svg = await QRCode.toString(addUrl(serverUrl, invite), { type: "svg", margin: 2 });
     return new Response(svg, { headers: { "content-type": "image/svg+xml" } });
   }
 
+  // 開くたびに登録トークンを発行し、そのトークン入りのサーバ URL と (暗号化するなら) 端末ごとの新しい鍵を見せる
   async function addPage(req: Request, invite: string): Promise<Response> {
     const rec = (await store.invites.read())[invite];
-    if (rec === undefined) return html(404, notFoundPageHtml("この招待リンクは登録簿にない。管理画面で招待を作り直す。"));
-    // 開いたブラウザを招待に残し、この招待で登録した端末の info に写す (未使用のうちだけ。最後に開いたものが残る)
-    if (rec.used_by === null) {
-      const browser = browserFromHeaders(req.headers);
-      await store.invites.update((cur) => {
-        const r = cur[invite];
-        return r === undefined || r.used_by !== null ? { result: null } : { next: { ...cur, [invite]: { ...r, browser } }, result: null };
-      });
-    }
-    return html(200, addPageHtml({ addserverUrl: inviteUrls(serverUrl, invite).addserver_url, tags: rec.tags, used: rec.used_by !== null, cryptoKey: rec.crypto?.key ?? null }));
+    if (rec === undefined) return html(404, notFoundPageHtml("この招待リンクは登録簿にない (削除されたかもしれない)。管理画面で招待を作り直す。"));
+    const token = newId();
+    const key = rec.encrypt ? newCryptoKey() : null;
+    const browser = browserFromHeaders(req.headers);
+    const at = clock();
+    await store.registrations.update((cur) => ({ next: issueRegistration(cur, token, { invite, key, browser, now: at }), result: null }));
+    return html(200, addPageHtml({ addserverUrl: addserverUrl(serverUrl, token), tags: rec.tags, cryptoKey: key }), { "cache-control": "no-store" });
   }
 
   const assets = Object.fromEntries(
@@ -371,7 +384,10 @@ export function createApp(deps: AppDeps) {
     [`${ADMIN}/api/devices/:id/crypto/confirm/:nonce`]: {
       GET: (req: Bun.BunRequest<"/bark-admin/api/devices/:id/crypto/confirm/:nonce">) => confirmCrypto(req.params.id, req.params.nonce),
     },
-    [`${ADMIN}/api/invites`]: { POST: createInvite },
+    [`${ADMIN}/api/invites`]: { GET: listInvites, POST: createInvite },
+    [`${ADMIN}/api/invites/:invite`]: {
+      DELETE: (req: Bun.BunRequest<"/bark-admin/api/invites/:invite">) => deleteInvite(req.params.invite),
+    },
     [`${ADMIN}/api/invites/:invite/qr.svg`]: {
       GET: (req: Bun.BunRequest<"/bark-admin/api/invites/:invite/qr.svg">) => inviteQr(req.params.invite),
     },

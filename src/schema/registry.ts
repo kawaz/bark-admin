@@ -8,7 +8,7 @@ export type Tags = v.InferOutput<typeof TagsSchema>;
 // 端末の Bark アプリの暗号化設定に入れる鍵 (AES256 / GCM / noPadding の Key 欄)。文字列の UTF-8 バイト列がそのまま鍵になる
 const CryptoKeySchema = v.pipe(v.string(), v.regex(/^[A-Za-z0-9]{32}$/, "crypto key must be 32 characters of [A-Za-z0-9]"));
 
-// 招待が持つ鍵 (PATCH で鍵を指定するときも同じ形)
+// 登録トークンが持つ鍵 (PATCH で鍵を指定するときも同じ形)
 export const CryptoKeyOnlySchema = v.strictObject({ key: CryptoKeySchema });
 export type CryptoKeyOnly = v.InferOutput<typeof CryptoKeyOnlySchema>;
 
@@ -21,7 +21,7 @@ export const DeviceCryptoSchema = v.strictObject({
 });
 export type DeviceCrypto = v.InferOutput<typeof DeviceCryptoSchema>;
 
-// 招待ページを開いたブラウザ。登録時に device.info の browser_* へ写す
+// 招待ページを開いたブラウザ (登録トークンに残す)。登録時に device.info の browser_* へ写す
 export const InviteBrowserSchema = v.object({
   user_agent: v.optional(v.string()),
   // Sec-CH-UA* ヘッダ (小文字の名前 → 値)。Safari は送らない
@@ -64,19 +64,37 @@ export type DeviceRecord = v.InferOutput<typeof DeviceRecordSchema>;
 export const DevicesSchema = v.record(v.string(), DeviceRecordSchema);
 export type Devices = v.InferOutput<typeof DevicesSchema>;
 
+// 招待: 再利用できるテンプレ。QR (/bark-admin/add/:invite) はこれを指し、削除するまで何度でも使える
 export const InviteRecordSchema = v.object({
   tags: TagsSchema,
+  // true なら登録トークンを発行するたびに端末ごとの新しい鍵を作る
+  encrypt: v.boolean(),
   created_at: v.string(),
-  used_by: v.nullable(v.string()),
-  // 登録時に device へ写す鍵。招待ページで端末の持ち主に見せる
-  crypto: v.optional(v.nullable(CryptoKeyOnlySchema), null),
-  // 未使用のうちに招待ページを最後に開いたブラウザ
-  browser: v.optional(v.nullable(InviteBrowserSchema), null),
+  note: v.optional(v.string()),
 });
 export type InviteRecord = v.InferOutput<typeof InviteRecordSchema>;
 
 export const InvitesSchema = v.record(v.string(), InviteRecordSchema);
 export type Invites = v.InferOutput<typeof InvitesSchema>;
+
+// 登録トークン: 招待ページを開くたびに発行する使い切りのサーバ URL (/r/<token>)。登録に使われたら used_by / used_at を記録する
+export const RegistrationRecordSchema = v.object({
+  invite: v.string(),
+  // 招待の encrypt が true なら、このトークンで登録する端末の鍵 (招待ページに表示する)
+  crypto: v.nullable(CryptoKeyOnlySchema),
+  browser: v.nullable(InviteBrowserSchema),
+  created_at: v.string(),
+  expires_at: v.string(),
+  used_by: v.nullable(v.string()),
+  used_at: v.nullable(v.string()),
+});
+export type RegistrationRecord = v.InferOutput<typeof RegistrationRecordSchema>;
+
+export const RegistrationsSchema = v.record(v.string(), RegistrationRecordSchema);
+export type Registrations = v.InferOutput<typeof RegistrationsSchema>;
+
+// 招待を作り替える前の invites.json の行 (used_by を持つ)。起動時に見つけたら脇へ退ける
+export const LegacyInvitesSchema = v.record(v.string(), v.looseObject({ used_by: v.nullable(v.string()) }));
 
 // API で外に出す 1 device の形 (キーだった device_id を中に持つ)。pending_nonce は確認の根拠なので外に出さない
 // info の無い行も {} で出す
@@ -98,5 +116,4 @@ export const PatchDeviceSchema = v.pipe(
 );
 export type PatchDevice = v.InferOutput<typeof PatchDeviceSchema>;
 
-// encrypt: true なら招待に鍵を作り、登録された端末に写す
-export const CreateInviteSchema = v.strictObject({ tags: TagsSchema, encrypt: v.optional(v.boolean(), false) });
+export const CreateInviteSchema = v.strictObject({ tags: TagsSchema, encrypt: v.optional(v.boolean(), false), note: v.optional(v.string()) });
