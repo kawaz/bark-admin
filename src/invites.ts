@@ -1,4 +1,4 @@
-import type { InviteBrowser, RegistrationRecord, Registrations } from "./schema/registry.ts";
+import type { RegistrationRecord, Registrations } from "./schema/registry.ts";
 import { localIso } from "./time.ts";
 
 // 招待 (再利用できるテンプレ) と登録トークン (使い切り) の判断 (純粋関数)。永続化は store.ts、HTTP は app.ts。
@@ -15,13 +15,13 @@ export function isExpired(rec: RegistrationRecord, now: Date): boolean {
 export function issueRegistration(
   regs: Registrations,
   token: string,
-  r: { invite: string; key: string | null; browser: InviteBrowser; now: Date },
+  r: { invite: string; key: string | null; now: Date },
 ): Registrations {
   const kept = Object.fromEntries(Object.entries(regs).filter(([, rec]) => rec.used_by !== null || !isExpired(rec, r.now)));
   const rec: RegistrationRecord = {
     invite: r.invite,
     crypto: r.key === null ? null : { key: r.key },
-    browser: r.browser,
+    client: null,
     created_at: localIso(r.now),
     expires_at: localIso(new Date(r.now.getTime() + REGISTRATION_TTL_MS)),
     used_by: null,

@@ -2,7 +2,7 @@ import QRCode from "qrcode";
 import * as v from "valibot";
 import { assetRoutes, staticHtml } from "./assets.ts";
 import { BarkServer, RegisterResponseSchema, UpstreamError, type PushResult } from "./bark-server.ts";
-import { autoTags, browserFromHeaders, forwardedIp, observeRegistration, tailscaleWhois, type TailnetInfo, type Whois } from "./device-info.ts";
+import { autoTags, forwardedIp, observeRegistration, tailscaleWhois, type TailnetInfo, type Whois } from "./device-info.ts";
 import { gateToken, issueRegistration, registrationState } from "./invites.ts";
 import { addPageHtml, confirmedPageHtml, notFoundPageHtml } from "./pages/add.ts";
 import { parseJsonWith, parseWith } from "./parse.ts";
@@ -29,7 +29,8 @@ import {
   type CryptoKeyOnly,
   type DeviceRecord,
   type Devices,
-  type InviteBrowser,
+  type Client,
+  ClientSchema,
   type InviteRecord,
   type Tags,
 } from "./schema/registry.ts";
@@ -130,9 +131,9 @@ export function createApp(deps: AppDeps) {
     const body = await req.arrayBuffer();
     const isRegister = path === "/register";
 
-    // 登録トークンを使う登録 (consume) でだけ招待のタグと鍵を写す (再登録で人が直したタグや作り直した鍵を戻さない)。ブラウザの情報は再登録でも写し続ける
+    // 登録トークンを使う登録 (consume) でだけ招待のタグと鍵を写す (再登録で人が直したタグや作り直した鍵を戻さない)。招待ページから届いた client は再登録でも写し続ける
     let use: { token: string; tags: Tags; crypto: CryptoKeyOnly | null } | null = null;
-    let browser: InviteBrowser | null = null;
+    let client: Client | null = null;
     if (token !== null) {
       const rec = (await store.registrations.read())[token];
       if (rec === undefined) return barkError(404, "registration link not found. Open the invite page again");
@@ -140,7 +141,7 @@ export function createApp(deps: AppDeps) {
       const gate = gateToken(rec, { isRegister, requestedKey: isRegister ? requestedKey(url, contentType, body) : "", inviteExists: invite !== undefined, now: clock() });
       if (gate.kind === "gone") return barkError(410, gate.message);
       if (gate.consume && invite !== undefined) use = { token, tags: invite.tags, crypto: rec.crypto };
-      browser = rec.browser;
+      client = rec.client;
     }
 
     // whois は bark-server の応答を待つ間に引いておく
@@ -152,7 +153,7 @@ export function createApp(deps: AppDeps) {
       if (isRegister && up.status === 200) {
         const reg = parseJsonWith(RegisterResponseSchema, up.body);
         if (reg.ok && reg.value.code === 200) {
-          await recordRegistration(reg.value.data.device_key, reg.value.data.device_token, use, { headers: req.headers, tailnet: await tailnet, browser });
+          await recordRegistration(reg.value.data.device_key, reg.value.data.device_token, use, { headers: req.headers, tailnet: await tailnet, client });
         }
       }
       return upstreamResponse(up);
@@ -163,7 +164,7 @@ export function createApp(deps: AppDeps) {
     deviceId: string,
     deviceToken: string,
     use: { token: string; tags: Tags; crypto: CryptoKeyOnly | null } | null,
-    seen: { headers: Headers; tailnet: TailnetInfo; browser: InviteBrowser | null },
+    seen: { headers: Headers; tailnet: TailnetInfo; client: Client | null },
   ) {
     const at = now();
     const info = observeRegistration({ ...seen, now: at });
@@ -338,9 +339,8 @@ export function createApp(deps: AppDeps) {
     if (rec === undefined) return html(404, notFoundPageHtml("この招待リンクは登録簿にない (削除されたかもしれない)。管理画面で招待を作り直す。"));
     const token = newId();
     const key = rec.encrypt ? newCryptoKey() : null;
-    const browser = browserFromHeaders(req.headers);
     const at = clock();
-    await store.registrations.update((cur) => ({ next: issueRegistration(cur, token, { invite, key, browser, now: at }), result: null }));
+    await store.registrations.update((cur) => ({ next: issueRegistration(cur, token, { invite, key, now: at }), result: null }));
     return html(200, addPageHtml({ addserverUrl: addserverUrl(serverUrl, token), token, tags: rec.tags, encrypted: key !== null }), { "cache-control": "no-store" });
   }
 
@@ -369,6 +369,17 @@ export function createApp(deps: AppDeps) {
               crypto: dev.crypto === null ? null : { confirmed_at: dev.crypto.confirmed_at },
             },
     });
+  }
+
+  // 招待ページの JS が送る端末の手がかり (iPad と Mac を見分ける platform / maxTouchPoints 等)。登録の時に device.info と os タグへ写す
+  async function registrationClient(token: string, req: Request): Promise<Response> {
+    const r = parseJsonWith(ClientSchema, await req.text());
+    if (!r.ok) return json(400, { error: r.error.message });
+    const found = await store.registrations.update((cur) => {
+      const rec = cur[token];
+      return rec === undefined ? { result: false } : { next: { ...cur, [token]: { ...rec, client: r.value } }, result: true };
+    });
+    return found ? new Response(null, { status: 204 }) : json(404, { error: `registration ${token} not found. Open the invite page again` });
   }
 
   // 登録できた端末に貼る鍵。招待ページのコピーボタンが押された時に取る (登録前は 409、鍵の無いトークンは 404)
@@ -429,6 +440,9 @@ export function createApp(deps: AppDeps) {
     [`${ADMIN}/api/invites`]: { GET: listInvites, POST: createInvite },
     [`${ADMIN}/api/registrations/:token`]: {
       GET: (req: Bun.BunRequest<"/bark-admin/api/registrations/:token">) => registrationStatus(req.params.token),
+    },
+    [`${ADMIN}/api/registrations/:token/client`]: {
+      POST: (req: Bun.BunRequest<"/bark-admin/api/registrations/:token/client">) => registrationClient(req.params.token, req),
     },
     [`${ADMIN}/api/registrations/:token/crypto-key`]: {
       GET: (req: Bun.BunRequest<"/bark-admin/api/registrations/:token/crypto-key">) => registrationKey(req.params.token),

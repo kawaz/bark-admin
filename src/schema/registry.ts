@@ -21,13 +21,20 @@ export const DeviceCryptoSchema = v.strictObject({
 });
 export type DeviceCrypto = v.InferOutput<typeof DeviceCryptoSchema>;
 
-// 招待ページを開いたブラウザ (登録トークンに残す)。登録時に device.info の browser_* へ写す
-export const InviteBrowserSchema = v.object({
-  user_agent: v.optional(v.string()),
-  // Sec-CH-UA* ヘッダ (小文字の名前 → 値)。Safari は送らない
-  hints: v.optional(v.record(v.string(), v.string())),
+// 招待ページを開いたブラウザが JS で取って送る端末の手がかり (POST /api/registrations/:token/client)。登録トークンに残し、登録時に device.info へ写す。
+// HTTP ヘッダでは iPad (デスクトップ表示の Safari は Macintosh を名乗る) を見分けられないので、platform と maxTouchPoints を使う
+export const ClientSchema = v.strictObject({
+  user_agent: v.string(),
+  platform: v.string(),
+  max_touch_points: v.pipe(v.number(), v.integer(), v.minValue(0)),
+  language: v.string(),
+  screen: v.strictObject({ w: v.number(), h: v.number(), dpr: v.number() }),
 });
-export type InviteBrowser = v.InferOutput<typeof InviteBrowserSchema>;
+export type Client = v.InferOutput<typeof ClientSchema>;
+
+// client から判定した端末の種類 (src/device-info.ts の deviceKind)
+export const DeviceKindSchema = v.picklist(["ipad", "iphone", "mac", "android"]);
+export type DeviceKind = v.InferOutput<typeof DeviceKindSchema>;
 
 // 登録の要求から観察した端末情報。人は編集せず、再登録のたびに丸ごと置き換わる (出どころは src/device-info.ts)
 export const DeviceInfoSchema = v.object({
@@ -39,12 +46,21 @@ export const DeviceInfoSchema = v.object({
   // Accept-Language の値そのまま
   lang: v.optional(v.string()),
   ts_name: v.optional(v.string()),
+  // Tailscale のマシン名 (whois の Node.ComputedName、管理画面で付け替えられる)。name タグの元
+  ts_machine: v.optional(v.string()),
+  // 端末の申告するホスト名 (Hostinfo.Hostname)。iPadOS は localhost を返す
   ts_hostname: v.optional(v.string()),
   ts_os: v.optional(v.string()),
   ts_user: v.optional(v.string()),
   ts_ip: v.optional(v.string()),
+  // 招待ページを開いたブラウザが送った client (ClientSchema) と、そこから判定した端末の種類
+  device_kind: v.optional(DeviceKindSchema),
   browser_user_agent: v.optional(v.string()),
-  browser_hints: v.optional(v.record(v.string(), v.string())),
+  browser_platform: v.optional(v.string()),
+  browser_max_touch_points: v.optional(v.string()),
+  browser_language: v.optional(v.string()),
+  // `<幅>x<高さ>@<dpr>` (CSS px)
+  browser_screen: v.optional(v.string()),
   last_register_at: v.optional(v.string()),
 });
 export type DeviceInfo = v.InferOutput<typeof DeviceInfoSchema>;
@@ -95,7 +111,8 @@ export const RegistrationRecordSchema = v.object({
   invite: v.string(),
   // 招待の encrypt が true なら、このトークンで登録する端末の鍵 (招待ページに表示する)
   crypto: v.nullable(CryptoKeyOnlySchema),
-  browser: v.nullable(InviteBrowserSchema),
+  // 招待ページの JS が送る端末の手がかり。送られる前・送らないブラウザでは null
+  client: v.optional(v.nullable(ClientSchema), null),
   created_at: v.string(),
   expires_at: v.string(),
   used_by: v.nullable(v.string()),

@@ -532,7 +532,7 @@ describe("invites and registration tokens", () => {
     const res = await fetch(`${base}/r/${token}/register?devicetoken=tok&key=`);
     expect(res.status).toBe(200);
     expect(received.at(-1)).toMatchObject({ method: "GET", path: "/register", search: "?devicetoken=tok&key=" });
-    expect((await store.devices.read())["NEWKEY"]).toEqual({ device_token: "tok", registered_at: NOW, archived_at: null, tags: { owner: "kawaz", name: "new" }, crypto: null, info: { last_register_at: NOW, user_agent: expect.any(String), browser_user_agent: expect.any(String) } });
+    expect((await store.devices.read())["NEWKEY"]).toEqual({ device_token: "tok", registered_at: NOW, archived_at: null, tags: { owner: "kawaz", name: "new" }, crypto: null, info: { last_register_at: NOW, user_agent: expect.any(String) } });
 
     // 使った本人の再登録 (アプリ起動時) は期限を過ぎても通り、token だけ更新される
     clock = new Date(START.getTime() + REGISTRATION_TTL_MS + 1000);
@@ -707,7 +707,7 @@ describe("register", () => {
 describe("device info and auto tags on register", () => {
   const BARK_UA = "Bark/1.6.4 (me.fin.bark; build:8; iOS 26.7.1) Alamofire/5.10.2";
   const barkHeaders = { "user-agent": BARK_UA, "accept-language": "ja;q=1.0, en;q=0.9", "x-forwarded-for": "100.104.30.107" };
-  const tailnet = { ts_name: "zunphone.tail0000.ts.net", ts_hostname: "zunPhone", ts_os: "iOS", ts_user: "user@example.com", ts_ip: "100.104.30.107" };
+  const tailnet = { ts_name: "zunphone.tail0000.ts.net", ts_machine: "zunphone", ts_hostname: "zunPhone", ts_os: "iOS", ts_user: "user@example.com", ts_ip: "100.104.30.107" };
   const observed = { bark_version: "1.6.4", bark_build: "8", os_version: "iOS 26.7.1", user_agent: BARK_UA, lang: "ja;q=1.0, en;q=0.9", ...tailnet, last_register_at: NOW };
 
   test("plain /register records info and fills only missing tags with auto tags", async () => {
@@ -734,24 +734,58 @@ describe("device info and auto tags on register", () => {
     expect((await store.devices.read())["NEWKEY"]?.info).toMatchObject({ os_version: "iOS 26.7.1", last_register_at: NOW });
   });
 
-  test("/r/:token/register: invite tags win over auto tags; the browser that opened the invite page goes to info", async () => {
+  test("/r/:token/register: invite tags win over auto tags; the client the invite page sent goes to info and decides os", async () => {
     whoisResult = tailnet;
-    const inv = await createInvite({ owner: "kawaz", name: "ipad" });
+    const inv = await createInvite({ owner: "kawaz", name: "phone" });
     const safari = "Mozilla/5.0 (iPhone; CPU iPhone OS 26_7_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1";
-    const { token } = await openAdd(inv.invite, { "user-agent": safari, "sec-ch-ua-mobile": "?1" });
-    expect((await store.registrations.read())[token]?.browser).toEqual({ user_agent: safari, hints: { "sec-ch-ua-mobile": "?1" } });
+    const { token } = await openAdd(inv.invite);
+    const client = { user_agent: safari, platform: "iPhone", max_touch_points: 5, language: "ja-JP", screen: { w: 390, h: 844, dpr: 3 } };
+    expect((await post(`/bark-admin/api/registrations/${token}/client`, client)).status).toBe(204);
+    expect((await store.registrations.read())[token]?.client).toEqual(client);
 
     await fetch(`${base}/r/${token}/register?devicetoken=tok&key=`, { headers: barkHeaders });
     const d = (await store.devices.read())["NEWKEY"];
-    expect(d?.tags).toEqual({ owner: "kawaz", name: "ipad", os: "ios", lang: "ja", ts_user: "user@example.com" });
-    expect(d?.info).toEqual({ ...observed, browser_user_agent: safari, browser_hints: { "sec-ch-ua-mobile": "?1" } });
+    expect(d?.tags).toEqual({ owner: "kawaz", name: "phone", os: "ios", lang: "ja", ts_user: "user@example.com" });
+    expect(d?.info).toEqual({
+      ...observed,
+      device_kind: "iphone",
+      browser_user_agent: safari,
+      browser_platform: "iPhone",
+      browser_max_touch_points: "5",
+      browser_language: "ja-JP",
+      browser_screen: "390x844@3",
+    });
 
-    // 再登録で人が直したタグは招待のタグに戻らない。ブラウザの情報は写り続ける
+    // 再登録で人が直したタグは招待のタグに戻らない。client の情報は写り続ける
     await post("/bark-admin/api/devices/NEWKEY", { tags: { owner: "kawaz", name: "renamed" } }, "PATCH");
     await fetch(`${base}/r/${token}/register?devicetoken=tok2&key=NEWKEY`, { headers: barkHeaders });
     const again = (await store.devices.read())["NEWKEY"];
     expect(again?.tags).toEqual({ owner: "kawaz", name: "renamed", os: "ios", lang: "ja", ts_user: "user@example.com" });
-    expect(again?.info?.browser_user_agent).toBe(safari);
+    expect(again?.info?.device_kind).toBe("iphone");
+  });
+
+  test("an iPad (desktop Safari, localhost Hostname): name from ComputedName, os ipados; re-registering does not overwrite name / os", async () => {
+    whoisResult = { ts_name: "ipad-pro-12-9-gen-5.tail0000.ts.net", ts_machine: "ipad-pro-12-9-gen-5", ts_hostname: "localhost", ts_os: "iOS", ts_ip: "100.84.237.16" };
+    const { token } = await openAdd((await createInvite({ owner: "kawaz" })).invite);
+    const mac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
+    await post(`/bark-admin/api/registrations/${token}/client`, { user_agent: mac, platform: "MacIntel", max_touch_points: 5, language: "ja-JP", screen: { w: 1024, h: 1366, dpr: 2 } });
+    await fetch(`${base}/r/${token}/register?devicetoken=tok&key=IPAD`, { headers: { ...barkHeaders, "x-forwarded-for": "100.84.237.16" } });
+    const d = (await store.devices.read())["IPAD"];
+    expect(d?.tags).toEqual({ owner: "kawaz", name: "ipad-pro-12-9-gen-5", os: "ipados", lang: "ja" });
+    expect(d?.info).toMatchObject({ device_kind: "ipad", ts_machine: "ipad-pro-12-9-gen-5", ts_hostname: "localhost", browser_screen: "1024x1366@2" });
+
+    // 人が name / os を直した後の再登録 (マシン名が変わっても) で、自動タグは上書きしない
+    await post("/bark-admin/api/devices/IPAD", { tags: { owner: "kawaz", name: "ipad", os: "ios" } }, "PATCH");
+    whoisResult = { ...whoisResult, ts_machine: "renamed-machine" };
+    await fetch(`${base}/r/${token}/register?devicetoken=tok2&key=IPAD`, { headers: { ...barkHeaders, "x-forwarded-for": "100.84.237.16" } });
+    expect((await store.devices.read())["IPAD"]?.tags).toEqual({ owner: "kawaz", name: "ipad", os: "ios", lang: "ja" });
+  });
+
+  test("POST …/client validates the body and needs a known token", async () => {
+    const { token } = await openAdd((await createInvite({})).invite);
+    expect((await post(`/bark-admin/api/registrations/${token}/client`, { user_agent: "x" })).status).toBe(400);
+    expect((await post(`/bark-admin/api/registrations/${token}/client`, { user_agent: "x", platform: "p", max_touch_points: -1, language: "ja", screen: { w: 1, h: 1, dpr: 1 } })).status).toBe(400);
+    expect((await post("/bark-admin/api/registrations/nope/client", { user_agent: "x", platform: "p", max_touch_points: 0, language: "ja", screen: { w: 1, h: 1, dpr: 1 } })).status).toBe(404);
   });
 
   test("PATCH cannot edit info", async () => {

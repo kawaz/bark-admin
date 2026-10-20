@@ -1,7 +1,9 @@
+import { flowView } from "./add-state.js";
 import { errorMessage, writeClipboard } from "./common.js";
 
 // 招待ページ: 3 段のステップ (1. サーバーを追加 → 2. 受信確認 → 3. 暗号化) を、登録トークンの状態 (GET /bark-admin/api/registrations/:token) から描く。
-// 1 段目のボタンは 1 回だけ押せる (Bark はサーバーの重複を見ないので、押し直すと行が増え、2 回目以降は登録トークンが使用済みで key の無い行が残る)。
+// 何をどう見せるかは add-state.js の flowView が決め、ここは DOM に写すだけ。
+// 1 段目のボタンは登録を見つけるまで押せる (Bark の未導入・中断から戻ってもやり直せる)。押した直後の二重タップだけ 1 秒止める
 
 const $ = (sel) => document.querySelector(sel);
 const flow = $("#flow");
@@ -23,57 +25,47 @@ function setStep(id, mode, done = []) {
   li.className = `step ${mode}`;
   li.querySelector(".body").hidden = mode !== "current";
   const line = li.querySelector(".done-line");
-  line.replaceChildren(...[done].flat());
+  line.replaceChildren(...(mode === "done" ? [done].flat() : []));
   line.hidden = mode !== "done" || line.childNodes.length === 0;
 }
 
-// done なら登録した端末の詳細ページへのリンクを出す (表示だけで終わらせない)
-function finish(message, done = false) {
-  finished = true;
-  clearInterval(timer);
-  $("#flow-status").textContent = message;
-  if (done && deviceId !== null) {
+// Bark のサーバー一覧に同じ address が並んでも key (= device_id) で見分けられるよう、device_id を全文で添える
+function addedLine(r) {
+  const name = r.device?.tags.name;
+  return [`追加できた: ${name ?? ""}`, ...(name === undefined ? [] : [" "]), Object.assign(document.createElement("code"), { className: "id", textContent: r.used_by })];
+}
+
+function render(r) {
+  const view = flowView(r, hasCrypto);
+  if (r.state === "used") {
+    deviceId = r.used_by;
+    sendDeliveryOnce();
+  }
+  setStep("add", view.add, r.state === "used" ? addedLine(r) : []);
+  setStep("delivery", view.delivery, "受信を確認できた");
+  setStep("crypto", view.crypto, "暗号化を確認できた");
+  if (view.addButton === "removed") {
+    addButton.remove();
+    $("#no-bark").hidden = true;
+  }
+  for (const li of document.querySelectorAll(".step .message")) li.textContent = "";
+  if (view.current === null) $("#flow-status").textContent = view.message;
+  else $(`#step-${view.current} .message`).textContent = view.message;
+  if (view.deviceLink && deviceId !== null) {
     const link = $("#device-link");
     link.href = `/bark-admin/devices/${encodeURIComponent(deviceId)}`;
     link.hidden = false;
   }
-}
-
-function unusable() {
-  addButton.remove();
-  $("#no-bark").hidden = true;
-  $("#add-status").textContent = "この招待は使えない。QR を読み直す";
-  setStep("add", "current");
-  finish("");
-}
-
-function render(r) {
-  if (r.state === "expired" || r.state === "invite-deleted") return unusable();
-  if (r.state !== "used") {
-    if (addButton.disabled) $("#add-status").textContent = "Bark で追加中…。終わらないときは、このページを読み込み直してやり直す";
-    return;
+  if (view.finished) {
+    finished = true;
+    clearInterval(timer);
   }
-  deviceId = r.used_by;
-  // Bark のサーバー一覧に同じ address が並んでも key (= device_id) で見分けられるよう、device_id を全文で添える
-  const name = r.device?.tags.name;
-  setStep("add", "done", [`追加できた: ${name ?? ""}`, ...(name === undefined ? [] : [" "]), Object.assign(document.createElement("code"), { className: "id", textContent: r.used_by })]);
-  sendDeliveryOnce();
-  if ((r.device?.delivery.confirmed_at ?? null) === null) {
-    setStep("delivery", "current");
-    setStep("crypto", "later");
-    return;
-  }
-  setStep("delivery", "done", "受信を確認できた");
-  if (!hasCrypto) return finish("すべて済んだ。このページは閉じてよい", true);
-  if ((r.device?.crypto?.confirmed_at ?? null) === null) return setStep("crypto", "current");
-  setStep("crypto", "done", "暗号化を確認できた");
-  finish("すべて済んだ。このページは閉じてよい", true);
 }
 
 async function check() {
   if (finished) return;
   const res = await fetch(api, { cache: "no-store" });
-  if (res.status === 404) return unusable();
+  if (res.status === 404) return render({ state: "gone" });
   if (res.ok) render(await res.json());
 }
 
@@ -86,11 +78,11 @@ function startPolling() {
 async function sendConfirm(kind, status) {
   status.textContent = "送っている";
   const res = await fetch(`/bark-admin/api/devices/${encodeURIComponent(deviceId)}/confirm/${kind}`, { method: "POST" });
-  status.textContent = res.ok ? "送った。届いた通知をタップする" : `送れなかった: ${await errorMessage(res)}`;
+  status.textContent = res.ok ? "送った" : `送れなかった: ${await errorMessage(res)}`;
   return res.ok;
 }
 
-// 送れなかった時も印は残す (状態を読むたびに送り直すと、bark-server が受けない間ずっと送り続け、nonce も入れ替わる)。送り直しは「もう一度送る」で
+// 送れなかった時も印は残す (状態を読むたびに送り直すと、bark-server が受けない間ずっと送り続け、nonce も入れ替わる)。送り直しは「確認通知を再送する」で
 async function sendDeliveryOnce() {
   if (sessionStorage.getItem(DELIVERY_SENT) !== null) return;
   sessionStorage.setItem(DELIVERY_SENT, "1");
@@ -98,35 +90,39 @@ async function sendDeliveryOnce() {
   await sendConfirm("delivery", $("#delivery-status"));
 }
 
+// 端末の種類を見分ける手がかりをサーバに送る (iPad の Safari はデスクトップ表示で Macintosh を名乗るので、platform と maxTouchPoints が要る)
+fetch(`${api}/client`, {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({
+    user_agent: navigator.userAgent,
+    platform: navigator.platform,
+    max_touch_points: navigator.maxTouchPoints,
+    language: navigator.language,
+    screen: { w: screen.width, h: screen.height, dpr: devicePixelRatio },
+  }),
+});
+
 // ---------- 1. サーバーを追加 ----------
 
-// Bark が開けば Safari は裏に回る (hidden)。1.5 秒たっても回らなければ未導入とみなして App Store への案内を出し、押し直せるようにする
+// Bark が開けば Safari は裏に回る (hidden)。1.5 秒たっても回らなければ未導入とみなして App Store への案内を出す。
+// visibilitychange は「状態を読み直す」合図にだけ使い、ボタンの可否には使わない
 let wentHidden = false;
 addButton.addEventListener("click", () => {
   addButton.disabled = true;
-  addButton.textContent = "Bark で追加中…";
+  setTimeout(() => {
+    addButton.disabled = false;
+  }, 1000);
   wentHidden = false;
   location.href = addButton.dataset.href;
   startPolling();
   setTimeout(() => {
-    if (wentHidden || finished) return;
-    $("#no-bark").hidden = false;
-    addButton.disabled = false;
-    addButton.textContent = "Bark にサーバーを追加";
+    if (!wentHidden && !finished) $("#no-bark").hidden = false;
   }, 1500);
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") {
-    wentHidden = true;
-    // 案内を出した後で Bark が開いた場合も、押し直しで行が増えないよう閉じる
-    $("#no-bark").hidden = true;
-    if (addButton.isConnected && !addButton.disabled) {
-      addButton.disabled = true;
-      addButton.textContent = "Bark で追加中…";
-    }
-  } else {
-    check();
-  }
+  if (document.visibilityState === "hidden") wentHidden = true;
+  else check();
 });
 check();
 

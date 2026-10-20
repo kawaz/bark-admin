@@ -26,7 +26,26 @@ function setTime(node, iso) {
 }
 
 // 端末情報の並び (DESIGN.md のデータ節の順)。無い項目は出さない
-const INFO_KEYS = ["os_version", "bark_version", "bark_build", "lang", "ts_hostname", "ts_name", "ts_os", "ts_user", "ts_ip", "user_agent", "browser_user_agent", "browser_hints", "last_register_at"];
+const INFO_KEYS = [
+  "device_kind",
+  "os_version",
+  "bark_version",
+  "bark_build",
+  "lang",
+  "ts_machine",
+  "ts_hostname",
+  "ts_name",
+  "ts_os",
+  "ts_user",
+  "ts_ip",
+  "user_agent",
+  "browser_user_agent",
+  "browser_platform",
+  "browser_max_touch_points",
+  "browser_language",
+  "browser_screen",
+  "last_register_at",
+];
 
 function fact(label, value) {
   const dd = document.createElement("dd");
@@ -37,8 +56,6 @@ function fact(label, value) {
 function renderInfo(info) {
   const rows = INFO_KEYS.filter((k) => info[k] !== undefined).flatMap((k) => {
     const value = info[k];
-    // Sec-CH-UA* はヘッダ名ごとに 1 行
-    if (k === "browser_hints") return Object.entries(value).flatMap(([name, v]) => fact(name, v));
     if (k === "last_register_at") return fact(k, Object.assign(document.createElement("time"), { dateTime: value, textContent: formatAt(value), title: value }));
     return fact(k, value);
   });

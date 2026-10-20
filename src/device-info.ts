@@ -1,10 +1,10 @@
 import * as v from "valibot";
 import { parseJsonWith } from "./parse.ts";
-import type { DeviceInfo, InviteBrowser, Tags } from "./schema/registry.ts";
+import type { Client, DeviceInfo, DeviceKind, Tags } from "./schema/registry.ts";
 
 // 登録の要求から観察できる端末情報 (device.info) と、そこから作る自動タグ。
 // 出どころは 3 つ: Bark アプリの /register の User-Agent / Accept-Language、canddy が付ける X-Forwarded-For を tailscale whois で引いた結果、
-// 招待ページを開いたブラウザ (招待の browser)。
+// 招待ページを開いたブラウザが JS で送った client (登録トークンの client)。
 
 // Bark アプリの UA は Alamofire の既定形: `Bark/1.6.4 (me.fin.bark; build:8; iOS 26.7.1) Alamofire/5.10.2`
 const BARK_UA = /^Bark\/(\S+) \(me\.fin\.bark; build:(\S+); ([A-Za-z]+ [0-9][0-9.]*)\)/;
@@ -28,6 +28,7 @@ export function firstLanguage(acceptLanguage: string): string | undefined {
 const WhoisSchema = v.looseObject({
   Node: v.looseObject({
     Name: v.optional(v.nullable(v.string())),
+    ComputedName: v.optional(v.nullable(v.string())),
     Hostinfo: v.optional(
       v.nullable(
         v.looseObject({
@@ -40,7 +41,7 @@ const WhoisSchema = v.looseObject({
   UserProfile: v.optional(v.nullable(v.looseObject({ LoginName: v.optional(v.nullable(v.string())) }))),
 });
 
-export type TailnetInfo = Pick<DeviceInfo, "ts_name" | "ts_hostname" | "ts_os" | "ts_user" | "ts_ip">;
+export type TailnetInfo = Pick<DeviceInfo, "ts_name" | "ts_machine" | "ts_hostname" | "ts_os" | "ts_user" | "ts_ip">;
 
 function present(s: string | null | undefined): string | undefined {
   return s === null || s === undefined || s === "" ? undefined : s;
@@ -53,6 +54,7 @@ export function whoisToInfo(json: string, ip: string): TailnetInfo {
   const { Node, UserProfile } = r.value;
   return {
     ts_name: present(Node.Name)?.replace(/\.$/, ""),
+    ts_machine: present(Node.ComputedName),
     ts_hostname: present(Node.Hostinfo?.Hostname),
     ts_os: present(Node.Hostinfo?.OS),
     ts_user: present(UserProfile?.LoginName),
@@ -86,32 +88,49 @@ export function forwardedIp(xff: string | null): string | undefined {
   return last !== undefined && v.is(IpSchema, last) ? last : undefined;
 }
 
-// 招待ページを開いたブラウザ: User-Agent と、来れば Sec-CH-UA* (Safari は送らない)
-export function browserFromHeaders(headers: Headers): InviteBrowser {
-  const hints: Record<string, string> = {};
-  for (const [k, val] of headers) if (k.startsWith("sec-ch-ua")) hints[k] = val;
-  return { user_agent: present(headers.get("user-agent")), hints: Object.keys(hints).length > 0 ? hints : undefined };
+// 招待ページのブラウザが送った client から端末の種類を決める。よく使われる判定をそのまま:
+// iPad の Safari はデスクトップ表示で Macintosh / MacIntel を名乗るので、MacIntel かつタッチ点が 2 以上を iPad とみなす
+export function deviceKind(c: Client): DeviceKind | undefined {
+  if (c.platform === "MacIntel" && c.max_touch_points > 1) return "ipad";
+  if (c.user_agent.includes("iPad")) return "ipad";
+  if (c.user_agent.includes("iPhone")) return "iphone";
+  if (c.user_agent.includes("Macintosh") && c.max_touch_points <= 1) return "mac";
+  if (c.user_agent.includes("Android")) return "android";
+  return undefined;
 }
 
+const KIND_OS: Record<DeviceKind, string> = { ipad: "ipados", iphone: "ios", mac: "macos", android: "android" };
+
 // 登録の要求 1 回分の観察値。再登録のたびに丸ごと置き換える
-export function observeRegistration(p: { headers: Headers; tailnet: TailnetInfo; browser: InviteBrowser | null; now: string }): DeviceInfo {
+export function observeRegistration(p: { headers: Headers; tailnet: TailnetInfo; client: Client | null; now: string }): DeviceInfo {
   const ua = present(p.headers.get("user-agent"));
+  const c = p.client;
   return {
     ...(ua === undefined ? {} : parseBarkUserAgent(ua)),
     user_agent: ua,
     lang: present(p.headers.get("accept-language")),
     ...p.tailnet,
-    browser_user_agent: p.browser?.user_agent,
-    browser_hints: p.browser?.hints,
+    ...(c === null
+      ? {}
+      : {
+          device_kind: deviceKind(c),
+          browser_user_agent: present(c.user_agent),
+          browser_platform: present(c.platform),
+          browser_max_touch_points: String(c.max_touch_points),
+          browser_language: present(c.language),
+          browser_screen: `${c.screen.w}x${c.screen.h}@${c.screen.dpr}`,
+        }),
     last_register_at: p.now,
   };
 }
 
-// info から作るタグ。owner は人が決めるものなので作らない
+// info から作るタグ。owner は人が決めるものなので作らない。
+// name は Tailscale のマシン名 (ts_machine)。Hostinfo.Hostname は iPadOS が localhost を返すので使わない。
+// os は招待ページで判定した端末の種類を優先する (Bark の UA も Tailscale も iPad を iOS と報告する)
 export function autoTags(info: DeviceInfo): Tags {
   const tags: Tags = {};
-  const name = info.ts_hostname?.toLowerCase();
-  const os = (info.ts_os ?? info.os_version?.split(" ")[0])?.toLowerCase();
+  const name = info.ts_machine?.toLowerCase();
+  const os = info.device_kind === undefined ? (info.ts_os ?? info.os_version?.split(" ")[0])?.toLowerCase() : KIND_OS[info.device_kind];
   const lang = info.lang === undefined ? undefined : firstLanguage(info.lang);
   if (name !== undefined) tags["name"] = name;
   if (os !== undefined) tags["os"] = os;

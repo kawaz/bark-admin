@@ -26,7 +26,12 @@ type Built = { body: string; etag: string; contentType: string };
 
 // asset 名 → 版 (hash 先頭 8)。JS の import 先 (common.js) は import を持たないので、生の内容の hash がそのまま版になる。
 // import する側は、版を書き込んだ後の内容で hash を取り直す (import 先が変われば import する側の版も変わる)
-const raw = new Map(readdirSync(ASSET_DIR).map((name) => [name, readFileSync(join(ASSET_DIR, name), "utf8")]));
+// .d.ts はテストのための型で、配らない
+const raw = new Map(
+  readdirSync(ASSET_DIR)
+    .filter((name) => !name.endsWith(".d.ts"))
+    .map((name) => [name, readFileSync(join(ASSET_DIR, name), "utf8")]),
+);
 const rawVersion = new Map([...raw].map(([name, text]) => [name, sha256(text).slice(0, 8)]));
 
 function versionImports(text: string): string {

@@ -29,40 +29,40 @@ ${main}
 `;
 }
 
-// 段の見出しと、済んだ時に出す 1 行 (data-done に add.js が書く)。段の中身は今の段の時だけ見える
+// 段の見出しと、済んだ時に出す 1 行 (add.js が書く)。段の中身は今の段の時だけ見える。
+// 中身の先頭の .message には、今の段の案内を add.js が状態に合わせて書く (public/assets/add-state.js の MESSAGES)
 // 最初は 1 段目が今の段、残りは先の段
 function step(id: string, n: number, title: string, body: string): string {
   return `<li id="step-${id}" class="step ${n === 1 ? "current" : "later"}">
 <h2><span class="mark" aria-hidden="true">${n}</span>${esc(title)}</h2>
 <p class="done-line" hidden></p>
 <div class="body stack"${n === 1 ? "" : " hidden"}>
+<p class="message" role="status"></p>
 ${body}
 </div>
 </li>`;
 }
 
-// 1. サーバーを追加。ボタンは 1 回だけ押せる。Bark が開かなかった時だけ App Store への案内を出す
+// 1. サーバーを追加。ボタンは登録を見つけるまで押せる。Bark が開かなかった時だけ App Store への案内を出す
 function addStep(addserverUrl: string, tags: string): string {
   return step(
     "add",
     1,
     "Bark にサーバーを追加",
     `<button type="button" id="add-server" class="open" data-href="${esc(addserverUrl)}">Bark にサーバーを追加</button>
-<p id="add-status" class="hint" role="status"></p>
 <p id="no-bark" class="hint" hidden>Bark が開かなかった。入っていなければ <a href="${esc(APP_STORE_URL)}">App Store から入れて</a>からもう一度</p>
-<p>Bark に切り替わったら、サーバーの追加を確定する。この端末が${tags === "" ? "タグなしで" : "次のタグで"}登録される。ボタンはこのページを開いた 1 台だけ、24 時間まで使える。</p>
+<p>押すと Bark が開き、このサーバーを追加する。この端末は${tags === "" ? "タグなしで" : "次のタグで"}登録される。このページを開いた 1 台用で、24 時間まで使える。</p>
 ${tags === "" ? "" : `<ul class="tags">${tags}</ul>`}`,
   );
 }
 
-// 2. 受信確認。登録できたら add.js が平文の確認通知を 1 回送る
+// 2. 受信確認。登録できたら add.js が平文の確認通知を 1 回送る。届かない・消した時は再送する
 function deliveryStep(): string {
   return step(
     "delivery",
     2,
     "受信確認",
-    `<p>確認の通知が届いたらタップする。</p>
-<div class="actions"><button type="button" id="delivery-again" class="secondary">もう一度送る</button><output id="delivery-status" class="hint"></output></div>`,
+    `<div class="actions"><button type="button" id="delivery-again" class="secondary">確認通知を再送する</button><output id="delivery-status" class="hint"></output></div>`,
   );
 }
 
@@ -72,8 +72,7 @@ function cryptoStep(): string {
     "crypto",
     3,
     "暗号化",
-    `<p>この端末への通知は暗号化して送る。Bark に鍵を設定すると読める。</p>
-<div class="key-row"><code id="crypto-key" class="key masked" aria-label="暗号化キー (隠している)">••••••••</code></div>
+    `<div class="key-row"><code id="crypto-key" class="key masked" aria-label="暗号化キー (隠している)">••••••••</code></div>
 <button type="button" id="crypto-copy">暗号化キーをコピーして Bark を開く</button>
 <p id="crypto-status" class="hint" role="status"></p>
 <ol class="steps">
@@ -81,8 +80,7 @@ function cryptoStep(): string {
 <li>Algorithm を AES256、Mode を GCM、Padding を noPadding にする</li>
 <li>Key に鍵を貼って保存する</li>
 </ol>
-<div class="actions"><button type="button" id="crypto-confirm" class="secondary">暗号化の確認を送る</button><output id="crypto-confirm-status" class="hint"></output></div>
-<p class="hint">キーを設定してから送る。届いた通知をタップすると確認できる</p>`,
+<div class="actions"><button type="button" id="crypto-confirm" class="secondary">暗号化の確認通知を送る</button><output id="crypto-confirm-status" class="hint"></output></div>`,
   );
 }
 
@@ -97,7 +95,7 @@ export function addPageHtml(p: { addserverUrl: string; token: string; tags: Reco
 ${addStep(p.addserverUrl, tags)}
 ${deliveryStep()}
 ${p.encrypted ? `${cryptoStep()}\n` : ""}</ol>
-<p id="flow-status" class="hint" role="status"></p>
+<p id="flow-status" class="flow-status" role="status"></p>
 <a id="device-link" class="button open" hidden>この端末の設定を開く</a>`,
     "add.js",
   );
@@ -127,7 +125,7 @@ type ConfirmedDevice = {
   tags: Record<string, string>;
   delivery?: { confirmed_at: string | null } | undefined;
   crypto: { confirmed_at: string | null } | null;
-  info?: { os_version?: string | undefined; ts_hostname?: string | undefined } | undefined;
+  info?: { device_kind?: string | undefined; os_version?: string | undefined; ts_machine?: string | undefined } | undefined;
 };
 
 // 確認通知をタップして開かれるページ (crypto は復号できた端末だけが URL を知る)。詳細ページの要約を 1 画面で見せる。
@@ -144,10 +142,13 @@ export function confirmedPageHtml(p: { kind: "delivery" | "crypto"; deviceId: st
     row("暗号化", cryptoState(d.crypto), p.kind === "crypto"),
   ].join("");
   const tags = Object.entries(d.tags);
-  const info = [
-    ...(d.info?.os_version === undefined ? [] : [row("os_version", esc(d.info.os_version))]),
-    ...(d.info?.ts_hostname === undefined ? [] : [row("ts_hostname", esc(d.info.ts_hostname))]),
-  ].join("");
+  // 端末の見分けに効く 3 つ (種類・OS の版・Tailscale のマシン名)。ts_hostname は iPadOS が localhost を返すので出さない
+  const info = (["device_kind", "os_version", "ts_machine"] as const)
+    .flatMap((k) => {
+      const val = d.info?.[k];
+      return val === undefined ? [] : [row(k, esc(val))];
+    })
+    .join("");
   return page(
     `bark-admin: ${what.title}`,
     `<h1>${what.title}</h1>
