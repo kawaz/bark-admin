@@ -1,4 +1,4 @@
-import { el, errorMessage, formatAt, formatTagLines, matchTag, parseJsonl, parseTagLines, sendMigration } from "./common.js";
+import { el, errorMessage, formatAt, formatTagLines, matchTag, parseJsonl, parseTagLines } from "./common.js";
 
 const GROUP_LABELS = {
   content: "内容",
@@ -61,17 +61,6 @@ function tagButton(k, v, { label = `${k}=${v}`, className = "tag" } = {}) {
   });
 }
 
-// 公開名の注記。移行済みならそう示し、古い公開名で追加された端末 (Bark アプリは追加時の address に登録し続ける) には登録し直す案内のボタンを添える。
-// 不明な端末と今の公開名の端末には何も出さない。ボタンは端末名のリンクの外に置く
-function hostNote(d) {
-  if (d.migrated_to !== null) return [el("p", { className: "host-note", textContent: "移行済み" })];
-  if (d.info.server_host === undefined || d.info.server_host === state.currentHost) return [];
-  const status = el("output", { className: "hint" });
-  const button = el("button", { type: "button", className: "secondary small", textContent: "新しいサーバー名で登録し直す" });
-  button.addEventListener("click", () => sendMigration(d.device_id, button, status));
-  return [el("p", { className: "host-note" }, "サーバー名が古い", button, status)];
-}
-
 function deviceItem(d) {
   const { owner, name, ...rest } = d.tags;
   const archived = d.archived_at !== null;
@@ -83,6 +72,13 @@ function deviceItem(d) {
     { className: "who", href: `/bark-admin/devices/${encodeURIComponent(d.device_id)}` },
     el("span", { className: nameClass, textContent: name ?? "名前なし" }),
     ...(d.info.os_version === undefined ? [] : [el("span", { className: "os", textContent: d.info.os_version })]),
+    // 公開名の注記。移行済み (退役してよい) か、古い公開名で追加された端末 (Bark アプリは追加時の address に登録し続ける)。不明な端末には付けない。
+    // 登録し直す操作は詳細ページに置く
+    ...(d.migrated_to !== null
+      ? [el("span", { className: "host-note", textContent: "移行済み" })]
+      : d.info.server_host === undefined || d.info.server_host === state.currentHost
+        ? []
+        : [el("span", { className: "host-note", textContent: "サーバー名が古い" })]),
     el("span", { className: "id", textContent: d.device_id }),
     ...(d.crypto === null ? [] : [el("span", { className: "encrypted", textContent: d.crypto.confirmed_at === null ? "暗号化 (未確認)" : "暗号化" })]),
     ...(archived ? [el("span", { className: "retired", textContent: `退役 ${formatAt(d.archived_at)}` })] : []),
@@ -97,7 +93,7 @@ function deviceItem(d) {
   return el(
     "li",
     { className: archived ? "device archived" : "device" },
-    el("div", { className: "who-cell" }, who, ...hostNote(d)),
+    who,
     owner === undefined ? el("span", { className: "owner" }) : tagButton("owner", owner, { label: owner, className: "owner tag" }),
     tags,
     el("time", { dateTime: d.registered_at, textContent: formatAt(d.registered_at), title: d.registered_at }),

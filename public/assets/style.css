@@ -308,7 +308,7 @@ main.top {
   padding-block: 1rem;
   border-block-end: 1px solid var(--line);
 
-  > .who-cell {
+  > .who {
     grid-area: name;
     min-inline-size: 0;
   }
@@ -328,7 +328,7 @@ main.top {
   }
 
   &.archived {
-    > .who-cell .name {
+    > .who .name {
       color: var(--muted);
     }
     > .tags,
@@ -367,7 +367,7 @@ main.top {
   .device {
     align-items: baseline;
     /* 列は固定で指定する (タグの無い端末は .tags が消えるので自動配置だと日時が詰まる) */
-    > .who-cell {
+    > .who {
       grid-area: 1 / 1;
     }
     > .owner {
@@ -415,26 +415,11 @@ main.top {
     color: var(--danger);
   }
   .encrypted,
-  .os {
+  .os,
+  .host-note {
     font-size: var(--step--1);
     color: var(--muted);
   }
-}
-
-/* 端末名のリンクと、その下の公開名の注記 (ボタンをリンクの中に入れないため分ける) */
-.who-cell {
-  display: grid;
-  gap: 0.3rem;
-}
-
-.host-note {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  align-items: center;
-  margin: 0;
-  font-size: var(--step--1);
-  color: var(--muted);
 }
 
 .tags:empty {

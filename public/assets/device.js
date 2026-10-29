@@ -1,4 +1,4 @@
-import { copyText, el, errorMessage, formatAt, formatTagLines, parseTagLines, sendMigration, writeClipboard } from "./common.js";
+import { copyText, el, errorMessage, formatAt, formatTagLines, parseTagLines, writeClipboard } from "./common.js";
 
 // HTML と JS の版がずれると (古い版がキャッシュに残る等) 要素が見つからない。黙って空欄にせず、知らせて止める
 function stale(sel) {
@@ -216,7 +216,15 @@ $("#crypto-confirm").addEventListener("click", async () => {
   if (await sendConfirm("crypto", $("#crypto-status"), "暗号化の確認の通知を送った。iPhone で通知をタップすると確認済みになる")) $("#crypto-reload").hidden = false;
 });
 $("#crypto-reload").addEventListener("click", () => call("GET"));
-$("#migrate-send").addEventListener("click", (ev) => sendMigration(id, ev.currentTarget, $("#migrate-status")));
+// 新しい公開名で登録し直す案内の通知を送る。端末で通知をタップすると移行の案内ページが開く
+$("#migrate-send").addEventListener("click", async (ev) => {
+  const button = ev.currentTarget;
+  button.disabled = true;
+  $("#migrate-status").textContent = "送っている";
+  const res = await fetch(`${api}/migrate`, { method: "POST" });
+  $("#migrate-status").textContent = res.ok ? "通知を送った。端末で開いて案内に従う" : `送れなかった: ${await errorMessage(res)}`;
+  button.disabled = false;
+});
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") call("GET");
 });

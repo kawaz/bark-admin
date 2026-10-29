@@ -50,15 +50,6 @@ export async function errorMessage(res) {
   }
 }
 
-// 公開名が古い端末に、新しい公開名で登録し直す案内の通知を送る (POST /api/devices/:id/migrate)。端末で通知をタップすると移行の案内ページが開く
-export async function sendMigration(id, button, status) {
-  button.disabled = true;
-  status.textContent = "送っている";
-  const res = await fetch(`/bark-admin/api/devices/${encodeURIComponent(id)}/migrate`, { method: "POST" });
-  status.textContent = res.ok ? "通知を送った。端末で開いて案内に従う" : `送れなかった: ${await errorMessage(res)}`;
-  button.disabled = false;
-}
-
 export function el(tag, props = {}, ...children) {
   const node = document.createElement(tag);
   Object.assign(node, props);
