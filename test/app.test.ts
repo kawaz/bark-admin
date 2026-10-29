@@ -714,7 +714,7 @@ describe("register", () => {
 
 describe("device info and auto tags on register", () => {
   const BARK_UA = "Bark/1.6.4 (me.fin.bark; build:8; iOS 26.7.1) Alamofire/5.10.2";
-  // テストの要求は loopback から来るので、X-Forwarded-For (= canddy が見た接続元) を信頼する
+  // テストの要求は loopback から来るので、X-Forwarded-For (= caddy-app-proxy が見た接続元) を信頼する
   const barkHeaders = { "user-agent": BARK_UA, "accept-language": "ja;q=1.0, en;q=0.9", "x-forwarded-for": "100.104.30.107" };
   const observed = { bark_version: "1.6.4", bark_build: "8", os_version: "iOS 26.7.1", user_agent: BARK_UA, lang: "ja;q=1.0, en;q=0.9", last_register_at: NOW };
   const tailnet = { ts_name: "zunphone.tail0000.ts.net", ts_machine: "zunphone", ts_hostname: "zunPhone", ts_os: "iOS", ts_user: "user@example.com", ts_ip: "100.104.30.107" };

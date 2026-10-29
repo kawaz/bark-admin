@@ -6,18 +6,18 @@ iPhone / iPad の [Bark](https://github.com/Finb/Bark) アプリへ通知を送�
 
 - 目的: 自作ツールやスクリプトが「誰のどの端末に送るか」をタグで指定して通知を送れるようにする。端末の追加・命名・退役を Web UI で行える
 - 責務: 登録簿 (タグ、登録日時、退役、端末ごとの暗号化キー、登録の要求から観察した端末情報) / 招待 (再利用できるテンプレ) と使い切りの登録トークンによる登録 / タグによる宛先解決とファンアウト / 鍵を持つ端末への通知内容の暗号化 / 管理 UI
-- 責務外: APNs への配送 (bark-server)、Bark アプリへの鍵の設定 (端末の持ち主が招待ページか詳細画面からコピーして手で貼る)、認証 (到達制限は canddy の tailnet_only が担う。device_id は秘密扱いしない)
+- 責務外: APNs への配送 (bark-server)、Bark アプリへの鍵の設定 (端末の持ち主が招待ページか詳細画面からコピーして手で貼る)、認証 (到達制限は caddy-app-proxy の tailnet_only が担う。device_id は秘密扱いしない)
 
 ## 配置
 
 ```
 iPhone Bark app ──┐
-自作ツール ─────┼─ https://bark.<host>/ (canddy, tailnet 限定) ─→ bark-admin 127.0.0.1:8086 ─→ bark-server 127.0.0.1:8085 ─→ APNs
+自作ツール ─────┼─ https://bark.<host>/ (caddy-app-proxy, tailnet 限定) ─→ bark-admin 127.0.0.1:8086 ─→ bark-server 127.0.0.1:8085 ─→ APNs
 Web UI (人) ──────┘
 ```
 
 - bark-admin が `bark.<host>` の唯一の upstream。bark-server は直接叩かない (bark 互換の要求も bark-admin の root 面を経由する)
-- どちらも常駐せず、canddy の on-demand 起動 (502 → ensure スクリプト → 302)。bark-admin の ensure スクリプト (`ondemand/bark-admin-ensure.sh`) が bark-server の ensure (canddy-app-proxy の `ondemand/bark-server-ensure.sh`) も呼ぶ
+- どちらも常駐せず、caddy-app-proxy の on-demand 起動 (502 → ensure スクリプト → 302)。bark-admin の ensure スクリプト (`ondemand/bark-admin-ensure.sh`) が bark-server の ensure (caddy-app-proxy の `ondemand/bark-server-ensure.sh`) も呼ぶ
 - bun + TypeScript。スキーマは valibot で定義し型を導く (境界で parse、`as` / `any` / `!` 禁止)
 - 設定: `${XDG_CONFIG_HOME}/bark-admin/config.toml` に `server_url` (招待 URL / QR に埋める公開 URL、例 `https://bark.kawaz-mbp.kawaz.jp`) と `db_path` (登録簿の置き場) の 2 つ。listen port (8086) と bark-server の upstream (`127.0.0.1:8085`) は既定値で、変えるときは env `BARK_ADMIN_ADDR` / `BARK_SERVER_URL`。`X-Forwarded-For` を信頼する前段は既定で loopback だけで、足すときは env `BARK_ADMIN_TRUSTED_PROXIES` (CIDR のカンマ区切り)
 - データ: `${XDG_DATA_HOME}/bark-admin/devices.json` (= `db_path` の既定) (atomic rename で書く。台数が 1 桁なので DB を持たず手で直せる方を優先)。招待は `invites.json`、登録トークンは `registrations.json` (同じディレクトリ)。1 回限りの招待だった頃の `invites.json` (`used_by` を持つ行) は起動時に `invites.legacy-<日時>.json` へ退けて空から始める

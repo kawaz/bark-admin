@@ -1,13 +1,13 @@
 #!/bin/bash
 # bark-admin が port で listen していなければ起動する (冪等)。upstream の bark-server も先に起こす。
-# canddy (Caddy) の exec handler から 502 のたびに呼ばれる前提: 多重起動を lock で抑止し、
+# caddy-app-proxy (Caddy) の exec handler から 502 のたびに呼ばれる前提: 多重起動を lock で抑止し、
 # 何度呼ばれても副作用は「必要なら 1 回起動」だけ。lock 待ちの側も listen を
 # 待ってから返す (即 exit すると Caddy が 302 → 502 → 302 を繰り返す)。
 # Caddy は launchd 配下で PATH が最小なので、必要な物は絶対パスで引く。
 set -eu -o pipefail
 
 repo_dir="$(cd "$(dirname "$(realpath "$0")")/.." && pwd)"
-bark_server_ensure="${BARK_SERVER_ENSURE:-$HOME/.local/share/repos/github.com/kawaz/canddy-app-proxy/main/ondemand/bark-server-ensure.sh}"
+bark_server_ensure="${BARK_SERVER_ENSURE:-$HOME/.local/share/repos/github.com/kawaz/caddy-app-proxy/main/ondemand/bark-server-ensure.sh}"
 addr="${BARK_ADMIN_ADDR:-127.0.0.1:8086}"
 PORT="${addr##*:}"
 export PATH="/usr/bin:/bin"

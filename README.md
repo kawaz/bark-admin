@@ -13,7 +13,7 @@ just run        # 127.0.0.1:8086 で起動 (BARK_ADMIN_ADDR / BARK_SERVER_URL �
 
 端末は管理 UI の「デバイスを追加」で招待 (タグ・暗号化) を作り、その QR を新しい端末で読んで追加する。招待は削除するまで何度でも使え、QR を開くたびにその 1 台用の登録リンク (24 時間有効、1 回限り) が出る。
 
-通常は canddy-app-proxy から `ondemand/bark-admin-ensure.sh` で on-demand 起動する。
+通常は caddy-app-proxy から `ondemand/bark-admin-ensure.sh` で on-demand 起動する。
 
 ```sh
 # タグ宛先で送る (管理 UI は https://bark.<host>/bark-admin/)

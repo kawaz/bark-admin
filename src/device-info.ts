@@ -3,7 +3,7 @@ import { parseJsonWith } from "./parse.ts";
 import type { Client, DeviceInfo, DeviceKind, Tags } from "./schema/registry.ts";
 
 // 登録の要求から観察できる端末情報 (device.info) と、そこから作る自動タグ。
-// 出どころは 3 つ: Bark アプリの /register の User-Agent / Accept-Language、canddy が付ける X-Forwarded-For を tailscale whois で引いた結果、
+// 出どころは 3 つ: Bark アプリの /register の User-Agent / Accept-Language、caddy-app-proxy が付ける X-Forwarded-For を tailscale whois で引いた結果、
 // 招待ページを開いたブラウザが JS で送った client (登録トークンの client)。
 
 // Bark アプリの UA は Alamofire の既定形: `Bark/1.6.4 (me.fin.bark; build:8; iOS 26.7.1) Alamofire/5.10.2`

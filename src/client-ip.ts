@@ -1,6 +1,6 @@
 import * as v from "valibot";
 
-// 登録の要求を送ってきた端末の IP を決める。前段の proxy (canddy の Caddy、loopback から来る) が付ける X-Forwarded-For は、
+// 登録の要求を送ってきた端末の IP を決める。前段の proxy (caddy-app-proxy の Caddy、loopback から来る) が付ける X-Forwarded-For は、
 // 接続元がその proxy (loopback か BARK_ADMIN_TRUSTED_PROXIES の CIDR) の時だけ信頼し、末尾 (= proxy が見た接続元) を使う。
 // それ以外の接続元から来た X-Forwarded-For は誰でも書けるので無視し、接続元の IP をそのまま使う
 
