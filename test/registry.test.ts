@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { archiveDevice, finishConfirm, listItem, matchTag, matchTags, mergeTags, patchDevice, resolveTargets, selectDevices, startConfirm, upsertRegistration, view } from "../src/registry.ts";
+import { archiveDevice, finishConfirm, listItem, markMigrated, matchTag, matchTags, mergeTags, patchDevice, resolveTargets, selectDevices, startConfirm, upsertRegistration, view } from "../src/registry.ts";
 import type { Devices } from "../src/schema/registry.ts";
 
 const devices: Devices = {
@@ -69,7 +69,7 @@ describe("selectDevices", () => {
   });
   test("view carries device_id", () => {
     expect(selectDevices(devices, { name: "iphone" }, false)).toEqual([
-      { device_id: "A", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone", family: "kawazu" }, crypto: null, info: {}, delivery: { confirmed_at: null } },
+      { device_id: "A", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone", family: "kawazu" }, crypto: null, info: {}, delivery: { confirmed_at: null }, migrated_to: null, migrated_at: null },
     ]);
   });
 });
@@ -96,6 +96,16 @@ describe("upsertRegistration", () => {
     expect(r.devices["D"]).toEqual({ device_token: "new", registered_at: "t0", archived_at: "t1", tags: { owner: "kawaz", name: "old", os: "ios" }, crypto: null, info });
     const again = upsertRegistration(r.devices, { deviceId: "D", deviceToken: "new", tags: {}, crypto: null, info: { last_register_at: "t3" }, autoTags: {}, now: "t3" });
     expect(again.devices["D"]?.info).toEqual({ last_register_at: "t3" });
+  });
+});
+
+describe("markMigrated", () => {
+  test("the old device gets migrated_to / migrated_at once; a missing old device or the same key changes nothing", () => {
+    const once = markMigrated(devices, "A", "E", "t2");
+    expect(once["A"]).toMatchObject({ migrated_to: "E", migrated_at: "t2", archived_at: null });
+    expect(markMigrated(once, "A", "F", "t3")["A"]).toMatchObject({ migrated_to: "E", migrated_at: "t2" });
+    expect(markMigrated(devices, "NOPE", "E", "t2")).toBe(devices);
+    expect(markMigrated(devices, "A", "A", "t2")).toBe(devices);
   });
 });
 

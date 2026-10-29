@@ -33,7 +33,13 @@
         <dt>registered_at</dt>
         <dd><time id="registered-at"></time></dd>
         <dt>server_host</dt>
-        <dd id="server-host"></dd>
+        <dd>
+          <span id="server-host"></span>
+          <div id="migrate" class="actions" hidden>
+            <button id="migrate-send" type="button" class="secondary small">新しいサーバー名で登録し直す</button>
+            <output id="migrate-status" class="hint"></output>
+          </div>
+        </dd>
         <dt>受信確認</dt>
         <dd id="delivery-state"></dd>
         <dt>暗号化</dt>

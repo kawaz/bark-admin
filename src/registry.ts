@@ -17,7 +17,7 @@ export function matchTags(tags: Tags, filter: Tags): boolean {
 }
 
 // device_token (APNs の token) は bark-server の写しで送信にも照合にも使わないので外に出さない (登録簿には残す)
-export function view(id: string, { crypto, info, delivery, registered_at, archived_at, tags }: DeviceRecord): DeviceView {
+export function view(id: string, { crypto, info, delivery, registered_at, archived_at, tags, migrated_to, migrated_at }: DeviceRecord): DeviceView {
   return {
     device_id: id,
     registered_at,
@@ -26,6 +26,8 @@ export function view(id: string, { crypto, info, delivery, registered_at, archiv
     crypto: crypto === null ? null : { key: crypto.key, confirmed_at: crypto.confirmed_at },
     info: info ?? {},
     delivery: { confirmed_at: delivery?.confirmed_at ?? null },
+    migrated_to: migrated_to ?? null,
+    migrated_at: migrated_at ?? null,
   };
 }
 
@@ -66,11 +68,12 @@ export function mergeTags(invite: Tags, existing: Tags, auto: Tags): Tags {
 }
 
 // bark-server が登録を受けた結果を写す。新規は作り、既存は token を更新する。
-// tags / crypto は登録トークンを使う登録でだけ渡す招待のタグと鍵 (再登録では空と null)。crypto は既存の端末にも写し、null なら既存の鍵を保つ。
+// tags / crypto は登録トークンを使う登録でだけ渡すタグと鍵 (招待のトークンは招待のタグと新しい鍵、移行トークンは旧端末のタグと鍵。再登録では空と null)。
+// crypto は既存の端末にも写し、null なら既存の鍵を保つ。
 // info は今回の観察値で丸ごと置き換え、自動タグは info から作る
 export function upsertRegistration(
   devices: Devices,
-  reg: { deviceId: string; deviceToken: string; tags: Tags; crypto: CryptoKeyOnly | null; info: DeviceInfo; autoTags: Tags; now: string },
+  reg: { deviceId: string; deviceToken: string; tags: Tags; crypto: DeviceCrypto | null; info: DeviceInfo; autoTags: Tags; now: string },
 ): { devices: Devices; created: boolean } {
   const cur = devices[reg.deviceId];
   if (cur !== undefined) {
@@ -78,7 +81,7 @@ export function upsertRegistration(
       ...cur,
       device_token: reg.deviceToken,
       tags: mergeTags(reg.tags, cur.tags, reg.autoTags),
-      ...(reg.crypto === null ? {} : { crypto: freshCrypto(reg.crypto) }),
+      ...(reg.crypto === null ? {} : { crypto: reg.crypto }),
       info: reg.info,
     };
     return { devices: { ...devices, [reg.deviceId]: next }, created: false };
@@ -88,10 +91,18 @@ export function upsertRegistration(
     registered_at: reg.now,
     archived_at: null,
     tags: mergeTags(reg.tags, {}, reg.autoTags),
-    crypto: reg.crypto === null ? null : freshCrypto(reg.crypto),
+    crypto: reg.crypto,
     info: reg.info,
   };
   return { devices: { ...devices, [reg.deviceId]: rec }, created: true };
+}
+
+// 移行トークンでの登録: 旧端末 (from) に移行先 (to) を記録する。旧端末が無い (手で消した) か、同じ key で登録し直しただけなら何もしない。
+// 最初の移行の日時を保つ (同じトークンは 1 回しか使えないが、手で直した登録簿でも動かさない)
+export function markMigrated(devices: Devices, from: string, to: string, at: string): Devices {
+  const old = devices[from];
+  if (old === undefined || from === to || old.migrated_to !== undefined) return devices;
+  return { ...devices, [from]: { ...old, migrated_to: to, migrated_at: at } };
 }
 
 export function patchDevice(rec: DeviceRecord, patch: PatchDevice): DeviceRecord {

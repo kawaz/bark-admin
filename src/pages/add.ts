@@ -43,15 +43,16 @@ ${body}
 </li>`;
 }
 
-// 1. サーバーを追加。ボタンは登録を見つけるまで押せる。Bark が開かなかった時だけ App Store への案内を出す
-function addStep(addserverUrl: string, tags: string): string {
+// 1. サーバーを追加。ボタンは登録を見つけるまで押せる。Bark が開かなかった時だけ App Store への案内を出す。
+// label は段の見出しとボタン、note はボタンの下の説明 (招待と移行で違う)
+function addStep(addserverUrl: string, tags: string, label: string, note: string): string {
   return step(
     "add",
     1,
-    "Bark にサーバーを追加",
-    `<button type="button" id="add-server" class="open" data-href="${esc(addserverUrl)}">Bark にサーバーを追加</button>
+    label,
+    `<button type="button" id="add-server" class="open" data-href="${esc(addserverUrl)}">${esc(label)}</button>
 <p id="no-bark" class="hint" hidden>Bark が開かなかった。入っていなければ <a href="${esc(APP_STORE_URL)}">App Store から入れて</a>からもう一度</p>
-<p>押すと Bark が開き、このサーバーを追加する。この端末は${tags === "" ? "タグなしで" : "次のタグで"}登録される。このページを開いた 1 台用で、24 時間まで使える。</p>
+<p>${esc(note)}</p>
 ${tags === "" ? "" : `<ul class="tags">${tags}</ul>`}`,
   );
 }
@@ -84,19 +85,43 @@ function cryptoStep(): string {
   );
 }
 
-export function addPageHtml(p: { addserverUrl: string; token: string; tags: Record<string, string>; encrypted: boolean }): string {
-  const tags = Object.entries(p.tags)
+function tagItems(tags: Record<string, string>): string {
+  return Object.entries(tags)
     .map(([k, val]) => `<li class="tag">${esc(k)}=${esc(val)}</li>`)
     .join("");
+}
+
+// 段の並びと、全部済んだ時の行き先。動きは招待と移行で同じ (add.js)
+function flow(token: string, steps: string[]): string {
+  return `<ol id="flow" class="flow" data-token="${esc(token)}">
+${steps.join("\n")}
+</ol>
+<p id="flow-status" class="flow-status" role="status"></p>
+<a id="device-link" class="button open" hidden>この端末の設定を開く</a>`;
+}
+
+export function addPageHtml(p: { addserverUrl: string; token: string; tags: Record<string, string>; encrypted: boolean }): string {
+  const tags = tagItems(p.tags);
+  const note = `押すと Bark が開き、このサーバーを追加する。この端末は${tags === "" ? "タグなしで" : "次のタグで"}登録される。このページを開いた 1 台用で、24 時間まで使える。`;
   return page(
     "bark-admin: Bark にサーバーを追加",
     `<h1>Bark にこのサーバーを追加</h1>
-<ol id="flow" class="flow" data-token="${esc(p.token)}">
-${addStep(p.addserverUrl, tags)}
-${deliveryStep()}
-${p.encrypted ? `${cryptoStep()}\n` : ""}</ol>
-<p id="flow-status" class="flow-status" role="status"></p>
-<a id="device-link" class="button open" hidden>この端末の設定を開く</a>`,
+${flow(p.token, [addStep(p.addserverUrl, tags, "Bark にサーバーを追加", note), deliveryStep(), ...(p.encrypted ? [cryptoStep()] : [])])}`,
+    "add.js",
+  );
+}
+
+// 移行の案内ページ (/bark-admin/add/m/:token)。公開名が古い端末に、新しい公開名のサーバーを追加させる。
+// 段は招待ページの 1 段目 (見出しを「新しいサーバー名で追加」に) と 2 段目 (受信確認) だけ。鍵は旧端末から引き継ぎ、Bark の暗号化設定はアプリに 1 つなので貼り直さない
+export function migratePageHtml(p: { addserverUrl: string; token: string; tags: Record<string, string>; oldHost: string | undefined; newHost: string }): string {
+  const tags = tagItems(p.tags);
+  const note = `押すと Bark が開き、新しいサーバー名 ${p.newHost} を追加する。この端末は${tags === "" ? "タグなしで" : "今と同じ次のタグで"}登録され、暗号化キーもそのまま引き継ぐ。この端末用で、発行から 24 時間まで使える。`;
+  const old = p.oldHost === undefined ? "古いサーバー名" : p.oldHost;
+  return page(
+    "bark-admin: 新しいサーバー名で追加",
+    `<h1>Bark に新しいサーバー名を追加</h1>
+<p>サーバー名が ${esc(p.newHost)} に変わった。新しいサーバー名で登録し直し、済んだら Bark のサーバーリストから ${esc(old)} を削除してよい。</p>
+${flow(p.token, [addStep(p.addserverUrl, tags, "新しいサーバー名で追加", note), deliveryStep()])}`,
     "add.js",
   );
 }

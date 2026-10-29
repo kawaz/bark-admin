@@ -89,6 +89,9 @@ export const DeviceRecordSchema = v.object({
   info: v.optional(DeviceInfoSchema),
   // 受信の確認を一度も送っていない行には無い (未確認として扱う)
   delivery: v.optional(DeliveryConfirmSchema),
+  // 新しい公開名で登録し直した (移行した) 先の device_id と日時。移行トークンでの登録で付く。移行していない行には無い
+  migrated_to: v.optional(v.string()),
+  migrated_at: v.optional(v.string()),
 });
 export type DeviceRecord = v.InferOutput<typeof DeviceRecordSchema>;
 
@@ -107,18 +110,40 @@ export type InviteRecord = v.InferOutput<typeof InviteRecordSchema>;
 export const InvitesSchema = v.record(v.string(), InviteRecordSchema);
 export type Invites = v.InferOutput<typeof InvitesSchema>;
 
-// 登録トークン: 招待ページを開くたびに発行する使い切りのサーバ URL (/r/<token>)。登録に使われたら used_by / used_at を記録する
-export const RegistrationRecordSchema = v.object({
-  invite: v.string(),
-  // 招待の encrypt が true なら、このトークンで登録する端末の鍵 (招待ページに表示する)
-  crypto: v.nullable(CryptoKeyOnlySchema),
-  // 招待ページの JS が送る端末の手がかり。送られる前・送らないブラウザでは null
+// 移行トークンが旧端末から引き継ぐ鍵と暗号化の確認状態 (同じ Bark アプリに鍵が貼られたままなので、確認済みもそのまま写す)
+export const CarriedCryptoSchema = v.strictObject({ key: CryptoKeySchema, confirmed_at: v.nullable(v.string()) });
+export type CarriedCrypto = v.InferOutput<typeof CarriedCryptoSchema>;
+
+// 登録トークン: 使い切りのサーバ URL (/r/<token>)。登録に使われたら used_by / used_at を記録する。発行の元で 2 種類ある
+const registrationCommon = {
+  // 案内ページの JS が送る端末の手がかり。送られる前・送らないブラウザでは null
   client: v.optional(v.nullable(ClientSchema), null),
   created_at: v.string(),
   expires_at: v.string(),
   used_by: v.nullable(v.string()),
   used_at: v.nullable(v.string()),
+};
+
+// 招待ページを開くたびに発行するトークン。タグは登録の時に招待から写す
+export const InviteRegistrationSchema = v.object({
+  invite: v.string(),
+  migrate_from: v.optional(v.null(), null),
+  // 招待の encrypt が true なら、このトークンで登録する端末の鍵 (招待ページに表示する)
+  crypto: v.nullable(CryptoKeyOnlySchema),
+  ...registrationCommon,
 });
+
+// 移行トークン: 公開名が古い端末 (migrate_from) を新しい公開名で登録し直させる。発行した時の旧端末のタグと鍵を自分で持つ (招待に依らない)
+export const MigrateRegistrationSchema = v.object({
+  migrate_from: v.string(),
+  tags: TagsSchema,
+  crypto: v.nullable(CarriedCryptoSchema),
+  ...registrationCommon,
+});
+export type MigrateRegistration = v.InferOutput<typeof MigrateRegistrationSchema>;
+
+// migrate_from が null なら招待のトークン、device_id なら移行トークン
+export const RegistrationRecordSchema = v.union([InviteRegistrationSchema, MigrateRegistrationSchema]);
 export type RegistrationRecord = v.InferOutput<typeof RegistrationRecordSchema>;
 
 export const RegistrationsSchema = v.record(v.string(), RegistrationRecordSchema);
@@ -129,16 +154,18 @@ export const LegacyInvitesSchema = v.record(v.string(), v.looseObject({ used_by:
 
 // API で外に出す 1 device の形 (キーだった device_id を中に持つ)。pending_nonce は確認の根拠なので、device_token は使い道が無いので外に出さない
 // info の無い行も {} で出す。delivery は確認状態だけ (無い行は未確認)
-export type DeviceView = { device_id: string } & Omit<DeviceRecord, "crypto" | "info" | "delivery" | "device_token"> & {
+// migrated_to / migrated_at は移行していなければ null
+export type DeviceView = { device_id: string } & Omit<DeviceRecord, "crypto" | "info" | "delivery" | "device_token" | "migrated_to" | "migrated_at"> & {
   crypto: { key: string; confirmed_at: string | null } | null;
   info: DeviceInfo;
   delivery: { confirmed_at: string | null };
+  migrated_to: string | null;
+  migrated_at: string | null;
 };
 
 // 一覧 (GET /api/devices) の 1 行。鍵は詳細でだけ見せ、一覧には暗号化の有無と確認状態だけ出す。info は一覧の表示に使う 3 項目だけ
-export type DeviceListItem = { device_id: string } & Omit<DeviceRecord, "crypto" | "info" | "delivery" | "device_token"> & {
+export type DeviceListItem = Omit<DeviceView, "crypto" | "info"> & {
   crypto: { confirmed_at: string | null } | null;
-  delivery: { confirmed_at: string | null };
   info: Pick<DeviceInfo, "ts_hostname" | "os_version" | "server_host">;
 };
 

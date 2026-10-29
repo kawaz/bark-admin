@@ -280,7 +280,7 @@ describe("devices API", () => {
     expect(nonce).not.toBe("");
     const lines = (await (await fetch(`${base}/bark-admin/api/devices?name=iphone`)).text()).split("\n").filter((l) => l !== "");
     expect(lines.map((l) => JSON.parse(l))).toEqual([
-      { device_id: "A", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, crypto: { confirmed_at: null }, info: {}, delivery: { confirmed_at: null } },
+      { device_id: "A", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, crypto: { confirmed_at: null }, info: {}, delivery: { confirmed_at: null }, migrated_to: null, migrated_at: null },
     ]);
     expect(lines.join("")).not.toContain(KEY_A);
     const detail = await (await fetch(`${base}/bark-admin/api/devices/A`)).text();
@@ -694,6 +694,168 @@ describe("invites and registration tokens", () => {
     expect(moved).toBe(join(dir, "invites.legacy-STAMP.json"));
     expect(await store.invites.read()).toEqual({});
     expect(await setAsideLegacyInvites(store, "STAMP2")).toBeNull();
+  });
+});
+
+describe("migration to the current public host", () => {
+  const BARK_UA = "Bark/1.6.4 (me.fin.bark; build:8; iOS 26.7.1) Alamofire/5.10.2";
+  const MigrateSchema = v.object({ token: v.string(), sent: v.object({ device_id: v.string(), status: v.number(), encrypted: v.boolean() }) });
+
+  // A を古い公開名で登録し直しておく (info.server_host が古い端末)
+  async function makeStale(id: string) {
+    await fetch(`${base}/register?devicetoken=t-${id}&key=${id}`, { headers: { "user-agent": BARK_UA, host: "bark.old.example" } });
+  }
+
+  async function migrate(id: string) {
+    const res = await fetch(`${base}/bark-admin/api/devices/${id}/migrate`, { method: "POST" });
+    expect(res.status).toBe(200);
+    return v.parse(MigrateSchema, await res.json());
+  }
+
+  test("POST …/migrate issues a token carrying all tags and the key with its confirmation, and sends the guide url (encrypted for a device with a key)", async () => {
+    await makeStale("A");
+    await store.devices.update((cur) => {
+      const a = cur["A"];
+      return a === undefined ? { result: null } : { next: { ...cur, A: { ...a, tags: { owner: "kawaz", name: "iphone", room: "bed" }, crypto: { key: KEY_A, confirmed_at: "t5", pending_nonce: "N" } } }, result: null };
+    });
+    const r = await migrate("A");
+    expect(r.sent).toEqual({ device_id: "A", status: 200, encrypted: true });
+    expect((await store.registrations.read())[r.token]).toEqual({
+      migrate_from: "A",
+      tags: { owner: "kawaz", name: "iphone", room: "bed" },
+      crypto: { key: KEY_A, confirmed_at: "t5" },
+      client: null,
+      created_at: NOW,
+      expires_at: localIso(new Date(START.getTime() + REGISTRATION_TTL_MS)),
+      used_by: null,
+      used_at: null,
+    });
+    const [sealed] = sealedPushes();
+    expect(sealed?.device_key).toBe("A");
+    expect(sealed && JSON.parse(nodeDecrypt(KEY_A, sealed.iv, sealed.ciphertext))).toEqual({
+      title: "bark-admin サーバー名の更新",
+      body: "新しいサーバー名 bark.example で登録し直す。タップして案内に従う\ndevice: A",
+      url: `https://bark.example/bark-admin/add/m/${r.token}`,
+    });
+  });
+
+  test("a device without a key gets the guide in plain; an unused migration token is reused (with the current tags), not added", async () => {
+    await makeStale("B");
+    const first = await migrate("B");
+    expect(first.sent.encrypted).toBe(false);
+    const push = received.at(-1);
+    expect(JSON.parse(push?.body ?? "")).toEqual({
+      title: "bark-admin サーバー名の更新",
+      body: "新しいサーバー名 bark.example で登録し直す。タップして案内に従う\ndevice: B",
+      url: `https://bark.example/bark-admin/add/m/${first.token}`,
+      device_key: "B",
+    });
+    await post("/bark-admin/api/devices/B", { tags: { owner: "kawaz", name: "ipad2" } }, "PATCH");
+    const second = await migrate("B");
+    expect(second.token).toBe(first.token);
+    const regs = await store.registrations.read();
+    expect(Object.keys(regs)).toEqual([first.token]);
+    expect(regs[first.token]).toMatchObject({ tags: { owner: "kawaz", name: "ipad2" }, crypto: null });
+    // 期限が切れたら新しく発行する
+    clock = new Date(START.getTime() + REGISTRATION_TTL_MS);
+    const third = await migrate("B");
+    expect(third.token).not.toBe(first.token);
+    expect(Object.keys(await store.registrations.read())).toEqual([third.token]);
+  });
+
+  test("unknown device is 404, an already migrated device is 409", async () => {
+    expect((await fetch(`${base}/bark-admin/api/devices/NOPE/migrate`, { method: "POST" })).status).toBe(404);
+    await store.devices.update((cur) => {
+      const a = cur["A"];
+      return a === undefined ? { result: null } : { next: { ...cur, A: { ...a, migrated_to: "X", migrated_at: "t5" } }, result: null };
+    });
+    expect((await fetch(`${base}/bark-admin/api/devices/A/migrate`, { method: "POST" })).status).toBe(409);
+    expect(received).toHaveLength(0);
+  });
+
+  test("the guide page /add/m/:token has 2 steps (add with the new host label, delivery), no crypto step, and shows the old device's tags", async () => {
+    await makeStale("A");
+    await setCrypto("A", KEY_A);
+    const { token } = await migrate("A");
+    const res = await fetch(`${base}/bark-admin/add/m/${token}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const page = await res.text();
+    expect(page).toContain(`data-token="${token}"`);
+    expect(page).toContain(`bark://addserver?address=https://bark.example/r/${token}`);
+    expect(page).toContain('<li id="step-add"');
+    expect(page).toContain("新しいサーバー名で追加</button>");
+    expect(page).toContain('<li id="step-delivery"');
+    expect(page).not.toContain('id="step-crypto"');
+    expect(page).not.toContain("暗号化キーをコピー");
+    expect(page).not.toContain(KEY_A);
+    expect(page).toContain('<li class="tag">owner=kawaz</li><li class="tag">name=iphone</li>');
+    expect(page).toContain("bark.old.example を削除してよい");
+    expect(page).toMatch(/\/bark-admin\/assets\/add\.js\?v=[0-9a-f]{8}"/);
+    // 開いてもトークンは増えない
+    expect(Object.keys(await store.registrations.read())).toEqual([token]);
+    // 未知のトークン・招待のトークンは 404 の HTML
+    expect((await fetch(`${base}/bark-admin/add/m/nope`)).status).toBe(404);
+    const inviteToken = (await openAdd((await createInvite({})).invite)).token;
+    const notMigrate = await fetch(`${base}/bark-admin/add/m/${inviteToken}`);
+    expect(notMigrate.status).toBe(404);
+    expect(await notMigrate.text()).toContain('href="/bark-admin/"');
+  });
+
+  test("registering with a migration token copies the tags and the key to the new device, marks the old one migrated_to, and sends the done notice (encrypted) to the new one", async () => {
+    await makeStale("A");
+    await store.devices.update((cur) => {
+      const a = cur["A"];
+      return a === undefined ? { result: null } : { next: { ...cur, A: { ...a, crypto: { key: KEY_A, confirmed_at: "t5", pending_nonce: null }, delivery: { confirmed_at: "t4", pending_nonce: null } } }, result: null };
+    });
+    const { token } = await migrate("A");
+    received.length = 0;
+    const res = await fetch(`${base}/r/${token}/register?devicetoken=t-new&key=`, { headers: { "user-agent": BARK_UA, host: "bark.example" } });
+    expect(res.status).toBe(200);
+    const devices = await store.devices.read();
+    // 新しい端末: タグは旧端末のもの (自動タグは無いキーだけ)、鍵は確認状態ごと、受信確認はこれから
+    expect(devices["NEWKEY"]).toMatchObject({ tags: { owner: "kawaz", name: "iphone", os: "ios" }, crypto: { key: KEY_A, confirmed_at: "t5", pending_nonce: null }, info: { server_host: "bark.example" } });
+    expect(devices["NEWKEY"]?.delivery).toBeUndefined();
+    expect(devices["NEWKEY"]?.migrated_to).toBeUndefined();
+    // 旧端末: 移行先と日時が付き、確認状態・公開名・退役は触らない
+    expect(devices["A"]).toMatchObject({ migrated_to: "NEWKEY", migrated_at: NOW, archived_at: null, delivery: { confirmed_at: "t4" }, crypto: { confirmed_at: "t5" }, info: { server_host: "bark.old.example" } });
+    expect((await store.registrations.read())[token]).toMatchObject({ used_by: "NEWKEY", used_at: NOW });
+    // 完了の案内は新しい端末へ、旧端末の鍵 (= 引き継いだ鍵) で暗号化して
+    const [sealed] = sealedPushes();
+    expect(sealed?.device_key).toBe("NEWKEY");
+    expect(sealed && JSON.parse(nodeDecrypt(KEY_A, sealed.iv, sealed.ciphertext))).toEqual({
+      title: "bark-admin 移行完了",
+      body: "この端末は bark.example で登録された。Bark のサーバーリストから bark.old.example を削除してよい\ndevice: NEWKEY",
+    });
+    // 詳細・一覧の API に migrated_to / migrated_at が出る
+    expect(await (await fetch(`${base}/bark-admin/api/devices/A`)).json()).toMatchObject({ migrated_to: "NEWKEY", migrated_at: NOW });
+    expect(await (await fetch(`${base}/bark-admin/api/devices/NEWKEY`)).json()).toMatchObject({ migrated_to: null, migrated_at: null });
+    const [line] = (await (await fetch(`${base}/bark-admin/api/devices?name=iphone`)).text()).split("\n");
+    expect(JSON.parse(line ?? "")).toMatchObject({ device_id: "A", migrated_to: "NEWKEY", migrated_at: NOW });
+    // 移行トークンは招待の登録数に数えない
+    expect(await (await fetch(`${base}/bark-admin/api/invites`)).text()).toBe("");
+    // 案内ページが見る状態は used (2 段目の受信確認へ進む)
+    expect(await (await fetch(`${base}/bark-admin/api/registrations/${token}`)).json()).toMatchObject({ state: "used", used_by: "NEWKEY", encrypted: true });
+    // 使った本人の再登録は通り、旧端末の移行先は動かない。別の端末は 410
+    expect((await fetch(`${base}/r/${token}/register?devicetoken=t-new2&key=NEWKEY`)).status).toBe(200);
+    const gone = await fetch(`${base}/r/${token}/register?devicetoken=other&key=`);
+    expect(gone.status).toBe(410);
+    expect(await gone.json()).toMatchObject({ message: expect.stringContaining("device page") });
+    expect((await store.devices.read())["A"]).toMatchObject({ migrated_to: "NEWKEY", migrated_at: NOW });
+  });
+
+  test("a device without a key: the new device has no key and the done notice is plain", async () => {
+    await makeStale("B");
+    const { token } = await migrate("B");
+    received.length = 0;
+    await fetch(`${base}/r/${token}/register?devicetoken=t-new&key=B2`, { headers: { host: "bark.example" } });
+    expect((await store.devices.read())["B2"]).toMatchObject({ tags: { owner: "kawaz", name: "ipad" }, crypto: null });
+    const push = received.find((r) => r.path === "/push");
+    expect(JSON.parse(push?.body ?? "")).toEqual({
+      title: "bark-admin 移行完了",
+      body: "この端末は bark.example で登録された。Bark のサーバーリストから bark.old.example を削除してよい\ndevice: B2",
+      device_key: "B2",
+    });
   });
 });
 

@@ -4,8 +4,8 @@ import { assetRoutes, staticHtml } from "./assets.ts";
 import { clientIp, LOOPBACK, type Cidr } from "./client-ip.ts";
 import { BarkServer, RegisterResponseSchema, UpstreamError, type PushResult } from "./bark-server.ts";
 import { autoTags, observeRegistration, tailscaleWhois, type TailnetInfo, type Whois } from "./device-info.ts";
-import { gateToken, issueRegistration, registrationState } from "./invites.ts";
-import { addPageHtml, confirmedPageHtml, notFoundPageHtml } from "./pages/add.ts";
+import { gateToken, issueMigration, issueRegistration, registrationState, sourceExists } from "./invites.ts";
+import { addPageHtml, confirmedPageHtml, migratePageHtml, notFoundPageHtml } from "./pages/add.ts";
 import { parseJsonWith, parseWith } from "./parse.ts";
 import { encryptForBark, newCryptoIv, newCryptoKey, randomAlnum } from "./push-crypto.ts";
 import {
@@ -13,6 +13,7 @@ import {
   finishConfirm,
   freshCrypto,
   listItem,
+  markMigrated,
   patchDevice,
   resolveTargets,
   selectDevices,
@@ -27,7 +28,7 @@ import {
   PatchDeviceSchema,
   TagsSchema,
   type ConfirmKind,
-  type CryptoKeyOnly,
+  type DeviceCrypto,
   type DeviceRecord,
   type Devices,
   type Client,
@@ -62,6 +63,9 @@ const AdminPushEnvelopeSchema = v.looseObject({ device: v.optional(TagsSchema) }
 // register の要求側の key (使用済みの登録トークンでの再登録の判定用)。bark-server と同じく key / device_key の両方を見る
 const RegisterKeySchema = v.looseObject({ key: v.optional(v.string()), device_key: v.optional(v.string()) });
 
+// 登録トークンを使う登録 (consume) で端末に写すもの。migrateFrom は移行トークンの旧端末 (招待のトークンは null)
+type TokenUse = { token: string; tags: Tags; crypto: DeviceCrypto | null; migrateFrom: string | null };
+
 // started.key は crypto の時の鍵 (delivery は null)
 type ConfirmStart = { kind: "not-found" } | { kind: "no-key" } | { kind: "started"; key: string | null };
 
@@ -85,6 +89,11 @@ function barkError(status: number, message: string): Response {
 // 招待の QR が指す案内ページ
 function addUrl(serverUrl: string, invite: string): string {
   return `${serverUrl}${ADMIN}/add/${invite}`;
+}
+
+// 移行の案内ページ (移行トークンごと)
+function migrateUrl(serverUrl: string, token: string): string {
+  return `${serverUrl}${ADMIN}/add/m/${token}`;
 }
 
 // 登録トークン入りのサーバ URL を Bark に追加させる
@@ -115,6 +124,8 @@ export function createApp(deps: AppDeps) {
   const now = () => localIso(clock());
   const whois = deps.whois ?? tailscaleWhois;
   const trusted = deps.trustedProxies ?? LOOPBACK;
+  // 今の公開名 (server_url のホスト名)
+  const currentHost = new URL(serverUrl).hostname;
 
   async function withUpstream(fn: () => Promise<Response>): Promise<Response> {
     try {
@@ -136,16 +147,25 @@ export function createApp(deps: AppDeps) {
     const body = await req.arrayBuffer();
     const isRegister = path === "/register";
 
-    // 登録トークンを使う登録 (consume) でだけ招待のタグと鍵を写す (再登録で人が直したタグや作り直した鍵を戻さない)。招待ページから届いた client は再登録でも写し続ける
-    let use: { token: string; tags: Tags; crypto: CryptoKeyOnly | null } | null = null;
+    // 登録トークンを使う登録 (consume) でだけトークンのタグと鍵を写す (再登録で人が直したタグや作り直した鍵を戻さない)。案内ページから届いた client は再登録でも写し続ける。
+    // 招待のトークンは招待のタグと新しい鍵 (未確認から)、移行トークンは旧端末のタグと鍵 (確認状態ごと)
+    let use: TokenUse | null = null;
     let client: Client | null = null;
     if (token !== null) {
       const rec = (await store.registrations.read())[token];
       if (rec === undefined) return barkError(404, "registration link not found. Open the invite page again");
-      const invite = (await store.invites.read())[rec.invite];
-      const gate = gateToken(rec, { isRegister, requestedKey: isRegister ? requestedKey(url, contentType, body) : "", inviteExists: invite !== undefined, now: clock() });
+      const invites = await store.invites.read();
+      const gate = gateToken(rec, { isRegister, requestedKey: isRegister ? requestedKey(url, contentType, body) : "", inviteExists: sourceExists(rec, invites), now: clock() });
       if (gate.kind === "gone") return barkError(410, gate.message);
-      if (gate.consume && invite !== undefined) use = { token, tags: invite.tags, crypto: rec.crypto };
+      if (gate.consume) {
+        if (rec.migrate_from !== null) {
+          const crypto = rec.crypto === null ? null : { ...rec.crypto, pending_nonce: null };
+          use = { token, tags: rec.tags, crypto, migrateFrom: rec.migrate_from };
+        } else {
+          const invite = invites[rec.invite];
+          if (invite !== undefined) use = { token, tags: invite.tags, crypto: rec.crypto === null ? null : freshCrypto(rec.crypto), migrateFrom: null };
+        }
+      }
       client = rec.client;
     }
 
@@ -168,19 +188,42 @@ export function createApp(deps: AppDeps) {
   async function recordRegistration(
     deviceId: string,
     deviceToken: string,
-    use: { token: string; tags: Tags; crypto: CryptoKeyOnly | null } | null,
+    use: TokenUse | null,
     seen: { headers: Headers; tailnet: TailnetInfo | undefined; client: Client | null },
   ) {
     const at = now();
     const info = observeRegistration({ ...seen, now: at });
     const reg = { deviceId, deviceToken, tags: use?.tags ?? {}, crypto: use?.crypto ?? null, info, autoTags: autoTags(info), now: at };
-    await store.devices.update((cur) => ({ next: upsertRegistration(cur, reg).devices, result: null }));
+    const migrateFrom = use?.migrateFrom ?? null;
+    // 移行トークンなら旧端末に移行先を記録する。旧端末の公開名は完了の案内に使う
+    const oldHost = await store.devices.update((cur) => {
+      const next = upsertRegistration(cur, reg).devices;
+      if (migrateFrom === null) return { next, result: undefined };
+      return { next: markMigrated(next, migrateFrom, deviceId, at), result: cur[migrateFrom]?.info?.server_host };
+    });
     if (use === null) return;
     await store.registrations.update((cur) => {
       const rec = cur[use.token];
       if (rec === undefined || rec.used_by !== null) return { result: null };
       return { next: { ...cur, [use.token]: { ...rec, used_by: deviceId, used_at: at } }, result: null };
     });
+    if (migrateFrom !== null && migrateFrom !== deviceId) await sendMigrated(deviceId, reg.crypto, oldHost);
+  }
+
+  // 移行できた新しい端末に、Bark のサーバーリストから古いサーバー名を消してよいと知らせる (鍵があれば暗号化)。
+  // 送れなくても登録は済んでいるので、Bark アプリへの応答は変えずにログに残すだけ
+  async function sendMigrated(deviceId: string, crypto: DeviceCrypto | null, oldHost: string | undefined) {
+    const params = {
+      title: "bark-admin 移行完了",
+      body: `この端末は ${currentHost} で登録された。Bark のサーバーリストから ${oldHost ?? "古いサーバー名"} を削除してよい\ndevice: ${deviceId}`,
+    };
+    try {
+      const r = crypto === null ? await bark.pushPlain(deviceId, params) : await pushEncrypted(params, { id: deviceId, key: crypto.key });
+      if (r.status !== 200) console.log(`migration notice to ${deviceId} was not accepted by bark-server: ${r.message ?? `status ${r.status}`}`);
+    } catch (e) {
+      if (!(e instanceof UpstreamError)) throw e;
+      console.log(`migration notice to ${deviceId} failed: ${e.message}`);
+    }
   }
 
   // ---------- 管理面 (/bark-admin/) ----------
@@ -292,6 +335,31 @@ export function createApp(deps: AppDeps) {
     return html(200, confirmedPageHtml({ kind, deviceId: id, device: confirmed }));
   }
 
+  // 公開名が古い端末に移行トークンを用意し、案内ページ (/add/m/<token>) を開く通知をその端末へ送る (鍵があれば暗号化)。
+  // 旧端末のタグと鍵 (確認状態ごと) をトークンに写し、そのトークンでの登録で新しい端末へ写る
+  async function startMigration(id: string): Promise<Response> {
+    const dev = (await store.devices.read())[id];
+    if (dev === undefined) return json(404, { error: `device ${id} not found` });
+    if (dev.migrated_to !== undefined) return json(409, { error: `device ${id} was already migrated to ${dev.migrated_to}. Retire it from ${ADMIN}/devices/${id}` });
+    const at = clock();
+    const crypto = dev.crypto === null ? null : { key: dev.crypto.key, confirmed_at: dev.crypto.confirmed_at };
+    const token = await store.registrations.update((cur) => {
+      const r = issueMigration(cur, newId(), { from: id, tags: dev.tags, crypto, now: at });
+      return { next: r.regs, result: r.token };
+    });
+    const params = {
+      title: "bark-admin サーバー名の更新",
+      body: `新しいサーバー名 ${currentHost} で登録し直す。タップして案内に従う\ndevice: ${id}`,
+      url: migrateUrl(serverUrl, token),
+    };
+    return withUpstream(async () => {
+      const r = dev.crypto === null ? await bark.pushPlain(id, params) : await pushEncrypted(params, { id, key: dev.crypto.key });
+      const sent = { ...r, encrypted: dev.crypto !== null };
+      if (r.status === 200) return json(200, { token, sent });
+      return json(502, { error: `bark-server did not accept the migration notification: ${r.message ?? `status ${r.status}`}`, token, sent });
+    });
+  }
+
   // URL の kind (delivery / crypto)。それ以外は 404
   function confirmKind(raw: string): ConfirmKind | null {
     const r = parseWith(ConfirmKindSchema, raw);
@@ -314,9 +382,9 @@ export function createApp(deps: AppDeps) {
 
   async function listInvites(): Promise<Response> {
     const [invites, regs] = await Promise.all([store.invites.read(), store.registrations.read()]);
-    const used = Object.values(regs).filter((t) => t.used_by !== null);
+    const used = Object.values(regs).flatMap((t) => (t.used_by !== null && t.migrate_from === null ? [t.invite] : []));
     const body = Object.entries(invites)
-      .map(([id, rec]) => `${JSON.stringify(inviteView(id, rec, used.filter((t) => t.invite === id).length))}\n`)
+      .map(([id, rec]) => `${JSON.stringify(inviteView(id, rec, used.filter((invite) => invite === id).length))}\n`)
       .join("");
     return new Response(body, { headers: { "content-type": "application/jsonl; charset=utf-8" } });
   }
@@ -328,7 +396,7 @@ export function createApp(deps: AppDeps) {
       return { next: Object.fromEntries(Object.entries(cur).filter(([id]) => id !== invite)), result: true };
     });
     if (!found) return json(404, { error: `invite ${invite} not found` });
-    await store.registrations.update((cur) => ({ next: Object.fromEntries(Object.entries(cur).filter(([, t]) => t.invite !== invite || t.used_by !== null)), result: null }));
+    await store.registrations.update((cur) => ({ next: Object.fromEntries(Object.entries(cur).filter(([, t]) => t.migrate_from !== null || t.invite !== invite || t.used_by !== null)), result: null }));
     return new Response(null, { status: 204 });
   }
 
@@ -349,6 +417,16 @@ export function createApp(deps: AppDeps) {
     return html(200, addPageHtml({ addserverUrl: addserverUrl(serverUrl, token), token, tags: rec.tags, encrypted: key !== null }), { "cache-control": "no-store" });
   }
 
+  // 移行の案内ページ。トークンは移行 API が発行済みなので、開いても発行しない (同じ通知を何度開いても同じトークン)
+  async function migratePage(token: string): Promise<Response> {
+    const rec = (await store.registrations.read())[token];
+    if (rec === undefined || rec.migrate_from === null) {
+      return html(404, notFoundPageHtml("この移行リンクは登録簿にない。管理画面の端末の詳細から送り直す。", "移行リンクが見つからない"));
+    }
+    const oldHost = (await store.devices.read())[rec.migrate_from]?.info?.server_host;
+    return html(200, migratePageHtml({ addserverUrl: addserverUrl(serverUrl, token), token, tags: rec.tags, oldHost, newHost: currentHost }), { "cache-control": "no-store" });
+  }
+
   // 招待ページが登録の完了を見る。鍵は返さない (crypto-key で取る)
   async function registrationStatus(token: string): Promise<Response> {
     const [regs, invites, devices] = await Promise.all([store.registrations.read(), store.invites.read(), store.devices.read()]);
@@ -357,7 +435,7 @@ export function createApp(deps: AppDeps) {
     const dev = rec.used_by === null ? undefined : devices[rec.used_by];
     return json(200, {
       token,
-      state: registrationState(rec, { inviteExists: invites[rec.invite] !== undefined, now: clock() }),
+      state: registrationState(rec, { inviteExists: sourceExists(rec, invites), now: clock() }),
       used_by: rec.used_by,
       used_at: rec.used_at,
       expires_at: rec.expires_at,
@@ -404,10 +482,11 @@ export function createApp(deps: AppDeps) {
     [`${ADMIN}/devices/:id`]: staticHtml("device.html"),
     ...assetRoutes(),
     [`${ADMIN}/add/:invite`]: { GET: (req: Bun.BunRequest<"/bark-admin/add/:invite">) => addPage(req, req.params.invite) },
+    [`${ADMIN}/add/m/:token`]: { GET: (req: Bun.BunRequest<"/bark-admin/add/m/:token">) => migratePage(req.params.token) },
     [`${ADMIN}/push`]: { POST: adminPush },
     [`${ADMIN}/api/schema`]: { GET: () => json(200, { fields: pushParamFields }) },
     // 今の公開名 (server_url のホスト名)。画面が端末の info.server_host と見比べて、古い公開名で追加された端末に注記する
-    [`${ADMIN}/api/config`]: { GET: () => json(200, { server_host: new URL(serverUrl).hostname }) },
+    [`${ADMIN}/api/config`]: { GET: () => json(200, { server_host: currentHost }) },
     [`${ADMIN}/api/devices`]: { GET: listDevices },
     [`${ADMIN}/api/devices/:id`]: {
       GET: async (req: Bun.BunRequest<"/bark-admin/api/devices/:id">) => {
@@ -430,6 +509,9 @@ export function createApp(deps: AppDeps) {
         const key = newCryptoKey();
         return updateDevice(req.params.id, (rec) => ({ ...rec, crypto: freshCrypto({ key }) }));
       },
+    },
+    [`${ADMIN}/api/devices/:id/migrate`]: {
+      POST: (req: Bun.BunRequest<"/bark-admin/api/devices/:id/migrate">) => startMigration(req.params.id),
     },
     [`${ADMIN}/api/devices/:id/confirm/:kind`]: {
       POST: (req: Bun.BunRequest<"/bark-admin/api/devices/:id/confirm/:kind">) => {

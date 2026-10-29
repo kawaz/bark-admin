@@ -1,4 +1,4 @@
-import { copyText, el, errorMessage, formatAt, formatTagLines, parseTagLines, writeClipboard } from "./common.js";
+import { copyText, el, errorMessage, formatAt, formatTagLines, parseTagLines, sendMigration, writeClipboard } from "./common.js";
 
 // HTML と JS の版がずれると (古い版がキャッシュに残る等) 要素が見つからない。黙って空欄にせず、知らせて止める
 function stale(sel) {
@@ -65,12 +65,18 @@ function renderInfo(info) {
   $("#info").hidden = rows.length === 0;
 }
 
-// Bark アプリはサーバ追加時の address に登録し続けるので、公開名を変えた後も古い名前で来る端末がある
-function renderServerHost(host) {
-  const dd = $("#server-host");
-  if (host === undefined) dd.textContent = "不明";
-  else if (host === currentHost) dd.textContent = host;
-  else dd.replaceChildren(host, " ", el("span", { className: "hint", textContent: `古い (現在の公開名: ${currentHost})` }));
+// Bark アプリはサーバ追加時の address に登録し続けるので、公開名を変えた後も古い名前で来る端末がある。
+// 古ければ新しい公開名で登録し直す案内を送れる。移行済みなら移行先を示す (この端末は退役させる)
+function renderServerHost(d) {
+  const host = d.info.server_host;
+  const span = $("#server-host");
+  const stale = d.migrated_to === null && host !== undefined && host !== currentHost;
+  $("#migrate").hidden = !stale;
+  if (d.migrated_to !== null) {
+    span.replaceChildren("移行済み → ", el("a", { href: `/bark-admin/devices/${encodeURIComponent(d.migrated_to)}`, textContent: d.migrated_to }), "。この端末は退役してよい");
+  } else if (host === undefined) span.textContent = "不明";
+  else if (!stale) span.textContent = host;
+  else span.replaceChildren(host, " ", el("span", { className: "hint", textContent: `古い (現在の公開名: ${currentHost})` }));
 }
 
 function render(d) {
@@ -83,7 +89,7 @@ function render(d) {
   $("#device-id").textContent = d.device_id;
   $("#device-id-fact").textContent = d.device_id;
   setTime($("#registered-at"), d.registered_at);
-  renderServerHost(d.info.server_host);
+  renderServerHost(d);
   $("#tags").value = formatTagLines(d.tags);
   const tags = Object.entries(d.tags);
   $("#tag-chips").replaceChildren(...(tags.length === 0 ? [el("li", { className: "hint", textContent: "タグなし" })] : tags.map(([k, v]) => el("li", { className: "tag", textContent: `${k}=${v}` }))));
@@ -210,6 +216,7 @@ $("#crypto-confirm").addEventListener("click", async () => {
   if (await sendConfirm("crypto", $("#crypto-status"), "暗号化の確認の通知を送った。iPhone で通知をタップすると確認済みになる")) $("#crypto-reload").hidden = false;
 });
 $("#crypto-reload").addEventListener("click", () => call("GET"));
+$("#migrate-send").addEventListener("click", (ev) => sendMigration(id, ev.currentTarget, $("#migrate-status")));
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") call("GET");
 });
