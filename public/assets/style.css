@@ -410,7 +410,8 @@ main.top {
     color: var(--danger);
   }
   .encrypted,
-  .os {
+  .os,
+  .stale-host {
     font-size: var(--step--1);
     color: var(--muted);
   }

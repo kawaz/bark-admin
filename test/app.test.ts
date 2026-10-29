@@ -533,7 +533,7 @@ describe("invites and registration tokens", () => {
     const res = await fetch(`${base}/r/${token}/register?devicetoken=tok&key=`);
     expect(res.status).toBe(200);
     expect(received.at(-1)).toMatchObject({ method: "GET", path: "/register", search: "?devicetoken=tok&key=" });
-    expect((await store.devices.read())["NEWKEY"]).toEqual({ device_token: "tok", registered_at: NOW, archived_at: null, tags: { owner: "kawaz", name: "new" }, crypto: null, info: { last_register_at: NOW, user_agent: expect.any(String) } });
+    expect((await store.devices.read())["NEWKEY"]).toEqual({ device_token: "tok", registered_at: NOW, archived_at: null, tags: { owner: "kawaz", name: "new" }, crypto: null, info: { last_register_at: NOW, user_agent: expect.any(String), server_host: "localhost" } });
 
     // 使った本人の再登録 (アプリ起動時) は期限を過ぎても通り、token だけ更新される
     clock = new Date(START.getTime() + REGISTRATION_TTL_MS + 1000);
@@ -702,7 +702,7 @@ describe("register", () => {
     await fetch(`${base}/register?devicetoken=t1&key=`);
     expect((await store.devices.read())["NEWKEY"]?.tags).toEqual({});
     await fetch(`${base}/register?devicetoken=t9&key=A`);
-    expect((await store.devices.read())["A"]).toEqual({ device_token: "t9", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, crypto: null, info: { last_register_at: NOW, user_agent: expect.any(String) } });
+    expect((await store.devices.read())["A"]).toEqual({ device_token: "t9", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, crypto: null, info: { last_register_at: NOW, user_agent: expect.any(String), server_host: "localhost" } });
   });
 
   test("bark-server errors are passed through without touching the registry", async () => {
@@ -715,8 +715,9 @@ describe("register", () => {
 describe("device info and auto tags on register", () => {
   const BARK_UA = "Bark/1.6.4 (me.fin.bark; build:8; iOS 26.7.1) Alamofire/5.10.2";
   // テストの要求は loopback から来るので、X-Forwarded-For (= caddy-app-proxy が見た接続元) を信頼する
-  const barkHeaders = { "user-agent": BARK_UA, "accept-language": "ja;q=1.0, en;q=0.9", "x-forwarded-for": "100.104.30.107" };
-  const observed = { bark_version: "1.6.4", bark_build: "8", os_version: "iOS 26.7.1", user_agent: BARK_UA, lang: "ja;q=1.0, en;q=0.9", last_register_at: NOW };
+  // Host は caddy-app-proxy が透過する公開ホスト名 (Bark アプリがサーバ追加時に使った address のホスト)
+  const barkHeaders = { "user-agent": BARK_UA, "accept-language": "ja;q=1.0, en;q=0.9", "x-forwarded-for": "100.104.30.107", host: "bark.example" };
+  const observed = { bark_version: "1.6.4", bark_build: "8", os_version: "iOS 26.7.1", user_agent: BARK_UA, lang: "ja;q=1.0, en;q=0.9", server_host: "bark.example", last_register_at: NOW };
   const tailnet = { ts_name: "zunphone.tail0000.ts.net", ts_machine: "zunphone", ts_hostname: "zunPhone", ts_os: "iOS", ts_user: "user@example.com", ts_ip: "100.104.30.107" };
 
   test("plain /register without Tailscale: info from the request, only missing tags filled (name / os from the Bark UA)", async () => {
@@ -729,12 +730,30 @@ describe("device info and auto tags on register", () => {
     expect(a?.tags).toEqual({ owner: "kawaz", name: "iphone", os: "ios", lang: "ja" });
     expect(await (await fetch(`${base}/bark-admin/api/devices/A`)).json()).toMatchObject({ info: observed });
     const [line] = (await (await fetch(`${base}/bark-admin/api/devices?name=iphone`)).text()).split("\n");
-    expect(JSON.parse(line ?? "")).toMatchObject({ device_id: "A", info: { os_version: "iOS 26.7.1" } });
+    expect(JSON.parse(line ?? "")).toMatchObject({ device_id: "A", info: { os_version: "iOS 26.7.1", server_host: "bark.example" } });
     expect(line).not.toContain(BARK_UA);
 
     // 新しい端末: name は Bark の UA の iOS から iphone
     await fetch(`${base}/register?devicetoken=t1&key=`, { headers: { "user-agent": BARK_UA } });
     expect((await store.devices.read())["NEWKEY"]?.tags).toEqual({ name: "iphone", os: "ios" });
+  });
+
+  test("server_host is the Host of each register without the port, overwritten by the next register; the config API gives the current public host", async () => {
+    await fetch(`${base}/register?devicetoken=t9&key=A`, { headers: { ...barkHeaders, host: "bark.old.example:8443" } });
+    expect((await store.devices.read())["A"]?.info?.server_host).toBe("bark.old.example");
+    expect(await (await fetch(`${base}/bark-admin/api/devices/A`)).json()).toMatchObject({ info: { server_host: "bark.old.example" } });
+    const [line] = (await (await fetch(`${base}/bark-admin/api/devices?name=iphone`)).text()).split("\n");
+    expect(JSON.parse(line ?? "")).toMatchObject({ device_id: "A", info: { server_host: "bark.old.example" } });
+
+    await fetch(`${base}/r/${(await openAdd((await createInvite({})).invite)).token}/register?devicetoken=t10&key=A`, { headers: barkHeaders });
+    expect((await store.devices.read())["A"]?.info?.server_host).toBe("bark.example");
+    // server_url (https://bark.example) のホスト名
+    expect(await (await fetch(`${base}/bark-admin/api/config`)).json()).toEqual({ server_host: "bark.example" });
+  });
+
+  test("a devices.json written by hand with info.server_host is read as is", async () => {
+    await store.devices.update((cur) => ({ next: { ...cur, H: { device_token: "th", registered_at: "t0", archived_at: null, tags: {}, crypto: null, info: { server_host: "bark.old.example" } } }, result: null }));
+    expect(await (await fetch(`${base}/bark-admin/api/devices/H`)).json()).toMatchObject({ info: { server_host: "bark.old.example" } });
   });
 
   test("the IP for whois: X-Forwarded-For from loopback (the proxy), the peer address without it", async () => {

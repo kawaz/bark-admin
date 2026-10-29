@@ -45,6 +45,8 @@ export const DeviceInfoSchema = v.object({
   user_agent: v.optional(v.string()),
   // Accept-Language の値そのまま
   lang: v.optional(v.string()),
+  // 登録の要求の Host (port を落とした公開ホスト名)。Bark アプリはサーバ追加時の address に登録し続けるので、config の server_url と違えば古い公開名で追加された端末
+  server_host: v.optional(v.string()),
   ts_name: v.optional(v.string()),
   // Tailscale のマシン名 (whois の Node.ComputedName、管理画面で付け替えられる)。name タグの元
   ts_machine: v.optional(v.string()),
@@ -133,11 +135,11 @@ export type DeviceView = { device_id: string } & Omit<DeviceRecord, "crypto" | "
   delivery: { confirmed_at: string | null };
 };
 
-// 一覧 (GET /api/devices) の 1 行。鍵は詳細でだけ見せ、一覧には暗号化の有無と確認状態だけ出す。info は一覧の表示に使う 2 項目だけ
+// 一覧 (GET /api/devices) の 1 行。鍵は詳細でだけ見せ、一覧には暗号化の有無と確認状態だけ出す。info は一覧の表示に使う 3 項目だけ
 export type DeviceListItem = { device_id: string } & Omit<DeviceRecord, "crypto" | "info" | "delivery" | "device_token"> & {
   crypto: { confirmed_at: string | null } | null;
   delivery: { confirmed_at: string | null };
-  info: Pick<DeviceInfo, "ts_hostname" | "os_version">;
+  info: Pick<DeviceInfo, "ts_hostname" | "os_version" | "server_host">;
 };
 
 export const PatchDeviceSchema = v.pipe(

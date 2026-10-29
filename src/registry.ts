@@ -35,9 +35,13 @@ export function selectDevices(devices: Devices, filter: Tags, includeArchived: b
     .map(([id, rec]) => view(id, rec));
 }
 
-// 一覧に出す形。鍵そのものは落とし、暗号化の有無と確認状態だけ残す。info は端末名の脇に出す 2 項目だけ
+// 一覧に出す形。鍵そのものは落とし、暗号化の有無と確認状態だけ残す。info は端末名の脇に出す 3 項目だけ (server_host は公開名が古いかの注記に使う)
 export function listItem({ crypto, info, ...rest }: DeviceView): DeviceListItem {
-  return { ...rest, crypto: crypto === null ? null : { confirmed_at: crypto.confirmed_at }, info: { ts_hostname: info.ts_hostname, os_version: info.os_version } };
+  return {
+    ...rest,
+    crypto: crypto === null ? null : { confirmed_at: crypto.confirmed_at },
+    info: { ts_hostname: info.ts_hostname, os_version: info.os_version, server_host: info.server_host },
+  };
 }
 
 // 新しい鍵 (作り直し含む) は未確認から始める

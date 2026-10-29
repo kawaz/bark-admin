@@ -16,8 +16,8 @@ const SHOWN_TAGS = 4;
 
 const $ = (sel) => document.querySelector(sel);
 
-// 宛先 (フィルタ) と最後に読んだ一覧。一覧・宛先の写し・送信ボタンはここから描く
-const state = { filter: {}, filterOk: true, devices: [] };
+// 宛先 (フィルタ) と最後に読んだ一覧。一覧・宛先の写し・送信ボタンはここから描く。currentHost は今の公開名 (GET /api/config)
+const state = { filter: {}, filterOk: true, devices: [], currentHost: undefined };
 
 function readFilter() {
   const error = $("#filter-error");
@@ -72,6 +72,8 @@ function deviceItem(d) {
     { className: "who", href: `/bark-admin/devices/${encodeURIComponent(d.device_id)}` },
     el("span", { className: nameClass, textContent: name ?? "名前なし" }),
     ...(d.info.os_version === undefined ? [] : [el("span", { className: "os", textContent: d.info.os_version })]),
+    // 古い公開名で追加された端末 (Bark アプリは追加時の address に登録し続ける)。不明な端末には付けない
+    ...(d.info.server_host === undefined || d.info.server_host === state.currentHost ? [] : [el("span", { className: "stale-host", textContent: "サーバー名が古い" })]),
     el("span", { className: "id", textContent: d.device_id }),
     ...(d.crypto === null ? [] : [el("span", { className: "encrypted", textContent: d.crypto.confirmed_at === null ? "暗号化 (未確認)" : "暗号化" })]),
     ...(archived ? [el("span", { className: "retired", textContent: `退役 ${formatAt(d.archived_at)}` })] : []),
@@ -347,7 +349,8 @@ function setupInvite() {
 }
 
 async function main() {
-  const fields = await renderPushForm();
+  const [fields, config] = await Promise.all([renderPushForm(), fetch("/bark-admin/api/config").then((r) => r.json())]);
+  state.currentHost = config.server_host;
   await loadDevices();
 
   let timer;

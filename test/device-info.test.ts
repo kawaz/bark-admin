@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { autoTags, deviceKind, firstLanguage, observeRegistration, parseBarkUserAgent, whoisToInfo } from "../src/device-info.ts";
+import { autoTags, deviceKind, firstLanguage, observeRegistration, parseBarkUserAgent, serverHost, whoisToInfo } from "../src/device-info.ts";
 
 const BARK_UA = "Bark/1.6.4 (me.fin.bark; build:8; iOS 26.7.1) Alamofire/5.10.2";
 
@@ -71,6 +71,20 @@ describe("deviceKind", () => {
     ["unknown", client("curl/8.7.1", "", 0), undefined],
   ] as const)("%s", (_, c, kind) => {
     expect(deviceKind(c)).toBe(kind);
+  });
+});
+
+describe("serverHost", () => {
+  test("the Host header without the port, lower-cased", () => {
+    expect(serverHost("bark.kawaz-mbp.kawaz.jp")).toBe("bark.kawaz-mbp.kawaz.jp");
+    expect(serverHost("Bark.Example:8443")).toBe("bark.example");
+    expect(serverHost("127.0.0.1:8086")).toBe("127.0.0.1");
+    expect(serverHost("[::1]:8086")).toBe("[::1]");
+  });
+  test("missing or unparsable Host gives nothing", () => {
+    expect(serverHost(null)).toBeUndefined();
+    expect(serverHost("")).toBeUndefined();
+    expect(serverHost("bad host")).toBeUndefined();
   });
 });
 

@@ -14,6 +14,8 @@ function stale(sel) {
 const $ = (sel) => document.querySelector(sel) ?? stale(sel);
 const id = decodeURIComponent(location.pathname.split("/").at(-1));
 const api = `/bark-admin/api/devices/${encodeURIComponent(id)}`;
+// 今の公開名。端末が登録に使ったホスト名 (info.server_host) と違えば古い公開名で追加された端末
+const { server_host: currentHost } = await (await fetch("/bark-admin/api/config")).json();
 
 function timeEl(iso) {
   return el("time", { dateTime: iso, textContent: formatAt(iso), title: iso });
@@ -63,6 +65,14 @@ function renderInfo(info) {
   $("#info").hidden = rows.length === 0;
 }
 
+// Bark アプリはサーバ追加時の address に登録し続けるので、公開名を変えた後も古い名前で来る端末がある
+function renderServerHost(host) {
+  const dd = $("#server-host");
+  if (host === undefined) dd.textContent = "不明";
+  else if (host === currentHost) dd.textContent = host;
+  else dd.replaceChildren(host, " ", el("span", { className: "hint", textContent: `古い (現在の公開名: ${currentHost})` }));
+}
+
 function render(d) {
   const { name, owner } = d.tags;
   $("#detail").hidden = false;
@@ -73,6 +83,7 @@ function render(d) {
   $("#device-id").textContent = d.device_id;
   $("#device-id-fact").textContent = d.device_id;
   setTime($("#registered-at"), d.registered_at);
+  renderServerHost(d.info.server_host);
   $("#tags").value = formatTagLines(d.tags);
   const tags = Object.entries(d.tags);
   $("#tag-chips").replaceChildren(...(tags.length === 0 ? [el("li", { className: "hint", textContent: "タグなし" })] : tags.map(([k, v]) => el("li", { className: "tag", textContent: `${k}=${v}` }))));

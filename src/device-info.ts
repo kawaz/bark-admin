@@ -3,7 +3,7 @@ import { parseJsonWith } from "./parse.ts";
 import type { Client, DeviceInfo, DeviceKind, Tags } from "./schema/registry.ts";
 
 // 登録の要求から観察できる端末情報 (device.info) と、そこから作る自動タグ。
-// 出どころは 3 つ: Bark アプリの /register の User-Agent / Accept-Language、caddy-app-proxy が付ける X-Forwarded-For を tailscale whois で引いた結果、
+// 出どころは 3 つ: Bark アプリの /register の User-Agent / Accept-Language / Host、caddy-app-proxy が付ける X-Forwarded-For を tailscale whois で引いた結果、
 // 招待ページを開いたブラウザが JS で送った client (登録トークンの client)。
 
 // Bark アプリの UA は Alamofire の既定形: `Bark/1.6.4 (me.fin.bark; build:8; iOS 26.7.1) Alamofire/5.10.2`
@@ -91,6 +91,13 @@ export function deviceKind(c: Client): DeviceKind | undefined {
   return undefined;
 }
 
+// Host ヘッダ (caddy-app-proxy が透過する公開ホスト名) から port を落としたホスト名。Bark アプリはサーバ追加時の address に登録し続けるので、どの公開名で追加された端末かが分かる
+export function serverHost(host: string | null): string | undefined {
+  const h = present(host);
+  if (h === undefined || !URL.canParse(`http://${h}`)) return undefined;
+  return present(new URL(`http://${h}`).hostname);
+}
+
 const KIND_OS: Record<DeviceKind, string> = { ipad: "ipados", iphone: "ios", mac: "macos", android: "android" };
 
 // 登録の要求 1 回分の観察値。再登録のたびに丸ごと置き換える
@@ -101,6 +108,7 @@ export function observeRegistration(p: { headers: Headers; tailnet: TailnetInfo 
     ...(ua === undefined ? {} : parseBarkUserAgent(ua)),
     user_agent: ua,
     lang: present(p.headers.get("accept-language")),
+    server_host: serverHost(p.headers.get("host")),
     ...(p.tailnet ?? {}),
     ...(c === null
       ? {}

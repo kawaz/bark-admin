@@ -406,6 +406,8 @@ export function createApp(deps: AppDeps) {
     [`${ADMIN}/add/:invite`]: { GET: (req: Bun.BunRequest<"/bark-admin/add/:invite">) => addPage(req, req.params.invite) },
     [`${ADMIN}/push`]: { POST: adminPush },
     [`${ADMIN}/api/schema`]: { GET: () => json(200, { fields: pushParamFields }) },
+    // 今の公開名 (server_url のホスト名)。画面が端末の info.server_host と見比べて、古い公開名で追加された端末に注記する
+    [`${ADMIN}/api/config`]: { GET: () => json(200, { server_host: new URL(serverUrl).hostname }) },
     [`${ADMIN}/api/devices`]: { GET: listDevices },
     [`${ADMIN}/api/devices/:id`]: {
       GET: async (req: Bun.BunRequest<"/bark-admin/api/devices/:id">) => {
