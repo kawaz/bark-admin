@@ -88,7 +88,7 @@ Bark アプリの「推送加密 / Push Encryption」に合わせ、鍵を持つ
 
 - 方式は AES-256-GCM 固定 (アプリ側の設定は AES256 / GCM / noPadding)。鍵は端末ごとに 32 文字の `[A-Za-z0-9]` を CSPRNG から作り (rejection sampling で偏りなし)、その文字列の UTF-8 バイト列をそのまま鍵にする
 - 送るたびに端末ごとに 12 文字の `[A-Za-z0-9]` の IV を作る。平文は bark パラメータ全体の JSON (`device` / `device_key` を含まない)、`ciphertext = base64(暗号文 ‖ 16 byte の auth tag)`、AAD なし。暗号は WebCrypto (`crypto.subtle` の AES-GCM)
-- bark-server `/push` へ `{device_key, ciphertext, iv}` で 1 台ずつ送る。アプリは `ciphertext` を復号した JSON を通常のパラメータとして扱う
+- bark-server `/push` へ `{device_key, ciphertext, iv}` で 1 台ずつ送る。アプリは `ciphertext` を復号した JSON を通常のパラメータとして扱う。パラメータに `id` があれば `id` だけは平文でも並べる (bark-server が APNs の collapse id にし、Bark はこれで通知を置き換え・消す。`ciphertext` の中の `id` は bark-server に見えない)
 - 鍵の配り方: 招待を `encrypt: true` で作ると、招待ページを開くたびに発行する登録トークンに端末ごとの新しい鍵を作り、そのトークンでの登録で device へ写る (招待ページには登録できた後に「暗号化キーをコピーして Bark を開く」で渡す) (既存の端末でも写す。使用済みトークンでの再登録では写し直さないので、詳細画面で作り直した鍵は戻らない)。既存の端末は詳細画面の「暗号化キーを設定」で鍵を作り、そのままクリップボードへ写す (作り直す / 外すも詳細画面)。鍵を返すのは詳細 (`GET /bark-admin/api/devices/:id`) と、登録に使った後の `GET /bark-admin/api/registrations/:token/crypto-key` だけで、一覧には `crypto: {confirmed_at}` だけ出す。招待ページの HTML には鍵の平文を入れない
 - 確認: 鍵が Bark に正しく貼られたかは、暗号化した通知を端末が復号できたかで確かめる (`kind = crypto`、確認の節)
 
@@ -102,6 +102,8 @@ Bark アプリの「推送加密 / Push Encryption」に合わせ、鍵を持つ
 | `crypto` | 暗号化 (暗号化の節)。title「bark-admin 暗号化の確認」、body「この通知をタップすると暗号化の確認が完了する」+ 改行 + `device: <device_id>`。鍵が無ければ 409 | 復号できる (nonce は暗号文の中にしか無いので、復号できた端末だけが URL を開ける) | `crypto: {key, confirmed_at, pending_nonce}` |
 
 - `POST …/devices/:id/confirm/<kind>` で nonce を作って kind の `pending_nonce` に保存し、`url` = `<server_url>/bark-admin/api/devices/:id/confirm/<kind>/<nonce>` の確認通知を送る。送り直すと前の nonce は無効
+- 確認通知には `id` を付ける。`id` は nonce から一方向に導いた値 (`sha256("bark-admin:notice:<nonce>")` の base64url 先頭 22 文字) で、保存せずに確認の時に作り直す。暗号化した通知でも `id` は平文で bark-server に渡る (暗号化の節) ので、nonce そのものは使わない (暗号化の確認の根拠が平文に出る)
+- 確認が成立したら、同じ `id` の通知を消す: bark-server `/push` に平文の `{device_key, id, delete: "1"}` を送り、端末の通知センターと Bark の履歴から消す。鍵を持つ端末にも平文で送る (bark-server は平文の `delete` だけをサイレントプッシュにし (`apns/apns.go` の `IsDelete`)、Bark は平文の `userInfo` の `delete` / `id` だけを見て消す (`AppDelegate.didReceiveRemoteNotification`)。暗号化すると表示用の通知として届いて消えない)。中身は `id` だけ。消せなくても (bark-server が受けない・届かない) 確認は成功のままで、ログに残す。端末側は Bark の「Background App Refresh」が要る
 - タップで `GET …/confirm/<kind>/<nonce>` が開かれると、その kind の nonce が一致した時だけ `confirmed_at` を記録して nonce を消し「確認できた」の HTML を返す (同じ URL は 1 回だけ効く。別の kind の nonce では効かない)。ページは詳細の要約で、詳細と同じ 3 節 (「端末」= device_id / registered_at / 受信確認 / 暗号化、「タグ」= 全部をチップで、「端末情報」= device_kind / os_version / ts_machine があれば) に分け、今回確認した kind の行を太字にする。続けて 詳細 (`/bark-admin/devices/:id`) への「この端末の設定を開く」を出す。nonce が合わない (使用済み・古い) 時は 404 の HTML で、TOP (`/bark-admin/`) へのリンクを置く
 - Bark のサーバー一覧に同じ address が複数並んでも、各行の key が device_id なので、通知の body・確認できたページ・招待ページの「追加できた」・詳細の見出し直下に出す device_id と見比べれば登録簿上のどの端末かが分かる
 - 鍵を作り直す / 設定し直すと `crypto` は未確認に戻る。`pending_nonce` は API に出さない
@@ -129,11 +131,12 @@ Bark アプリはサーバ追加時の address に登録し続けるので、公
 
 1. 詳細の「新しいサーバー名で登録し直す」→ `POST /bark-admin/api/devices/:id/migrate`。旧端末のタグ全部と `crypto` (key / confirmed_at) を写した移行トークン (`migrate_from` = 旧 device_id、期限 24 時間) を作り、旧端末へ通知を送る: title「bark-admin サーバー名の更新」、body「新しいサーバー名 <今の公開名> で登録し直す。タップして案内に従う」+ 改行 + `device: <id>`、`url` = `<server_url>/bark-admin/add/m/<token>`。旧端末に鍵があれば暗号化して送る。期限内で未使用の移行トークンがあればそれを使い回し (タグと鍵は今の旧端末の値に写し直す)、トークンを増やさない。移行済み (`migrated_to` がある) の端末は 409
 2. 通知をタップすると移行の案内ページ `/bark-admin/add/m/<token>` が開く。招待ページと同じ段の UI と JS (`src/client/add.ts`、`/client` を送る、状態の読み方も同じ) で、1 段目は見出しとボタンが「新しいサーバー名で追加」(`bark://addserver?address=<server_url>/r/<token>`)、タグは旧端末のもの、2 段目は受信確認。鍵を引き継ぐので暗号化の段は無い (鍵の無い端末も同じ 2 段)。開いてもトークンは発行しない
-3. アプリが `/r/<token>/register` を叩くと、招待のトークンと同じく新しい device を作り、トークンのタグと鍵 (確認状態ごと) を写す (タグの優先は トークン > 既存 > 自動)。加えて旧端末に `migrated_to` (新しい device_id) と `migrated_at` を記録し、新しい端末へ完了の案内を送る: title「bark-admin 移行完了」、body「この端末は <今の公開名> で登録された。Bark のサーバーリストから <旧端末の server_host> を削除してよい」+ 改行 + `device: <新 id>` (鍵があれば暗号化)。送れなくても登録は済んでいるので、Bark アプリへの応答は変えずにログに残す
+3. アプリが `/r/<token>/register` を叩くと、招待のトークンと同じく新しい device を作り、トークンのタグと鍵 (確認状態ごと) を写す (タグの優先は トークン > 既存 > 自動)。加えて旧端末に `migrated_to` (新しい device_id) と `migrated_at` を記録し。登録の時には通知を送らない (完了の案内は次の受信確認が兼ねる)
    - 新しい端末には `migrated_from` (旧 device_id) を記録する。旧端末の受信確認・暗号化の確認・`info` は触らない
    - 新しい端末の受信確認は案内ページの 2 段目で取り直す
-4. 新しい端末の受信確認 (`GET …/confirm/delivery/<nonce>` で `delivery.confirmed_at` が付いた時) で、その端末の `migrated_from` の旧端末を自動でアーカイブする (`archived_at` を立てる。アーカイブ済みなら日時を保つ。`migrated_to` はそのまま)。鍵を持つ端末の移行は案内を暗号化して送っているので、ここまで来れば暗号の受信まで確かめられている。旧端末は一覧の既定から消え、`archived=1` で「移行済み」として見える
    - 移行トークンはタグと鍵を自分で持ち招待に依らないので、招待の削除や旧端末の有無で使えなくならない (`state` が `invite-deleted` にならない)。使用済み・期限切れの扱いは招待のトークンと同じ (登録の流れの 3)。招待の登録数には数えない
+4. 移行してきた端末 (`migrated_from` があり受信確認がまだの端末) の受信確認は「移行の確認」の 1 通にする: title「bark-admin 移行の確認」、body「新しいサーバー名 <今の公開名> で登録された。タップすると移行が完了し、Bark のサーバーリストから <旧端末の server_host> を削除してよい」+ 改行 + `device: <新 id>`。鍵を引き継いだ端末には暗号化して送る (引き継いだ鍵で読めることも同時に確かめる)。その後の受信確認はふつうの文面 (平文) に戻る
+5. 新しい端末の受信確認 (`GET …/confirm/delivery/<nonce>` で `delivery.confirmed_at` が付いた時) で、その端末の `migrated_from` の旧端末を自動でアーカイブする (`archived_at` を立てる。アーカイブ済みなら日時を保つ。`migrated_to` はそのまま)。鍵を持つ端末の移行は案内を暗号化して送っているので、ここまで来れば暗号の受信まで確かめられている。旧端末は一覧の既定から消え、`archived=1` で「移行済み」として見える。確認の通知に加え、旧端末に届いていた移行の案内も消す (確認の節の delete。移行の案内の `id` は旧 device_id から同じやり方で導き、送り直すと前の案内を置き換える)
 
 ## HTTP API
 

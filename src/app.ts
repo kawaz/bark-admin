@@ -68,8 +68,17 @@ const RegisterKeySchema = v.looseObject({ key: v.optional(v.string()), device_ke
 // 登録トークンを使う登録 (consume) で端末に写すもの。migrateFrom は移行トークンの旧端末 (招待のトークンは null)
 type TokenUse = { token: string; tags: Tags; crypto: DeviceCrypto | null; migrateFrom: string | null };
 
-// started.key は crypto の時の鍵 (delivery は null)
-type ConfirmStart = { kind: "not-found" } | { kind: "no-key" } | { kind: "started"; key: string | null };
+// started.key は端末の鍵 (無ければ null)。migration は移行してきた端末の最初の受信確認の時の旧端末の公開名 (移行の節。それ以外は null)
+type ConfirmStart = { kind: "not-found" } | { kind: "no-key" } | { kind: "started"; key: string | null; migration: { oldHost: string | undefined } | null };
+
+// 確認の通知を後から消す (delete) ための通知の id。seed は確認の nonce か、移行の案内なら旧端末の device_id。
+// Design rationale: id は暗号化した通知でも平文で bark-server に渡す (APNs の collapse id になり、Bark はこれで通知を消す) ので、
+// nonce そのものを id にすると暗号化の確認の根拠 (復号できた端末だけが知る nonce) が平文に出る。nonce から一方向に導いた値にして、保存せずに確認の時に同じ値を作り直す
+function noticeId(seed: string): string {
+  return new Bun.CryptoHasher("sha256").update(`bark-admin:notice:${seed}`).digest("base64url").slice(0, 22);
+}
+
+const migrateNoticeSeed = (oldId: string) => `migrate:${oldId}`;
 
 function json(status: number, body: unknown): Response {
   return Response.json(body, { status });
@@ -197,11 +206,10 @@ export function createApp(deps: AppDeps) {
     const info = observeRegistration({ ...seen, now: at });
     const reg = { deviceId, deviceToken, tags: use?.tags ?? {}, crypto: use?.crypto ?? null, info, autoTags: autoTags(info), now: at };
     const migrateFrom = use?.migrateFrom ?? null;
-    // 移行トークンなら旧端末に移行先を記録する。旧端末の公開名は完了の案内に使う
-    const oldHost = await store.devices.update((cur) => {
+    // 移行トークンなら新しい端末に移行元を、旧端末に移行先を記録する (完了の案内は新しい端末の受信確認が兼ねる)
+    await store.devices.update((cur) => {
       const next = upsertRegistration(cur, reg).devices;
-      if (migrateFrom === null) return { next, result: undefined };
-      return { next: markMigrated(next, migrateFrom, deviceId, at), result: cur[migrateFrom]?.info?.server_host };
+      return { next: migrateFrom === null ? next : markMigrated(next, migrateFrom, deviceId, at), result: null };
     });
     if (use === null) return;
     await store.registrations.update((cur) => {
@@ -209,22 +217,19 @@ export function createApp(deps: AppDeps) {
       if (rec === undefined || rec.used_by !== null) return { result: null };
       return { next: { ...cur, [use.token]: { ...rec, used_by: deviceId, used_at: at } }, result: null };
     });
-    if (migrateFrom !== null && migrateFrom !== deviceId) await sendMigrated(deviceId, reg.crypto, oldHost);
   }
 
-  // 移行できた新しい端末に、Bark のサーバーリストから古いサーバー名を消してよいと知らせる (鍵があれば暗号化)。
-  // 送れなくても登録は済んでいるので、Bark アプリへの応答は変えずにログに残すだけ
-  async function sendMigrated(deviceId: string, crypto: DeviceCrypto | null, oldHost: string | undefined) {
-    const params = {
-      title: "bark-admin 移行完了",
-      body: `この端末は ${currentHost} で登録された。Bark のサーバーリストから ${oldHost ?? "古いサーバー名"} を削除してよい\ndevice: ${deviceId}`,
-    };
+  // 役目を終えた通知 (確認の通知・移行の案内) を端末の通知センターと Bark の履歴から消す。
+  // Design rationale: 鍵を持つ端末にも平文の {id, delete} で送る。bark-server は平文の delete だけを見てサイレントプッシュにし (apns.go の IsDelete)、
+  // Bark は平文の userInfo の delete / id だけを見て消す (AppDelegate の didReceiveRemoteNotification)。暗号化すると表示用の通知として届き、消えない。中身は id だけで通知の内容は含まない。
+  // 消せなくても確認そのものは済んでいるので、ログに残すだけ
+  async function deleteNotice(deviceId: string, id: string) {
     try {
-      const r = crypto === null ? await bark.pushPlain(deviceId, params) : await pushEncrypted(params, { id: deviceId, key: crypto.key });
-      if (r.status !== 200) console.log(`migration notice to ${deviceId} was not accepted by bark-server: ${r.message ?? `status ${r.status}`}`);
+      const r = await bark.pushPlain(deviceId, { id, delete: "1" });
+      if (r.status !== 200) console.log(`deleting notice ${id} on ${deviceId} was not accepted by bark-server: ${r.message ?? `status ${r.status}`}`);
     } catch (e) {
       if (!(e instanceof UpstreamError)) throw e;
-      console.log(`migration notice to ${deviceId} failed: ${e.message}`);
+      console.log(`deleting notice ${id} on ${deviceId} failed: ${e.message}`);
     }
   }
 
@@ -273,7 +278,7 @@ export function createApp(deps: AppDeps) {
   async function pushEncrypted(params: PushParams, target: { id: string; key: string }): Promise<PushResult> {
     const iv = newCryptoIv();
     const ciphertext = await encryptForBark(target.key, iv, JSON.stringify(params));
-    return bark.pushEncrypted(target.id, { ciphertext, iv });
+    return bark.pushEncrypted(target.id, { ciphertext, iv, ...(typeof params["id"] === "string" ? { id: params["id"] } : {}) });
   }
 
   async function listDevices(req: Request): Promise<Response> {
@@ -301,7 +306,8 @@ export function createApp(deps: AppDeps) {
   }
 
   // 確認: nonce 入りの URL を通知で送り、タップで開かれると finishDeviceConfirm が kind の確認済みを記録する。
-  // delivery は平文で送り「通知が届くか」を、crypto は暗号化して送り「鍵が Bark に正しく設定されたか」を確かめる (復号できた端末だけが URL を知る)
+  // delivery は平文で送り「通知が届くか」を、crypto は暗号化して送り「鍵が Bark に正しく設定されたか」を確かめる (復号できた端末だけが URL を知る)。
+  // 移行してきた端末の最初の受信確認は「移行の確認」の文面にし、鍵があれば暗号化して送る (引き継いだ鍵で読めることも同時に確かめる、移行の節)
   async function startDeviceConfirm(id: string, kind: ConfirmKind): Promise<Response> {
     const nonce = randomAlnum(22);
     const started = await store.devices.update((cur): { next?: Devices; result: ConfirmStart } => {
@@ -309,18 +315,27 @@ export function createApp(deps: AppDeps) {
       if (r === undefined) return { result: { kind: "not-found" } };
       const next = startConfirm(r, kind, nonce);
       if (next === null) return { result: { kind: "no-key" } };
-      return { next: { ...cur, [id]: next }, result: { kind: "started", key: next.crypto?.key ?? null } };
+      const migration = kind === "delivery" && r.migrated_from !== undefined && (r.delivery?.confirmed_at ?? null) === null ? { oldHost: cur[r.migrated_from]?.info?.server_host } : null;
+      return { next: { ...cur, [id]: next }, result: { kind: "started", key: next.crypto?.key ?? null, migration } };
     });
     if (started.kind === "not-found") return json(404, { error: `device ${id} not found` });
     if (started.kind === "no-key") return json(409, { error: `device ${id} has no crypto key. Set one with POST ${ADMIN}/api/devices/${id}/crypto first` });
     const url = `${serverUrl}${ADMIN}/api/devices/${encodeURIComponent(id)}/confirm/${kind}/${nonce}`;
-    const key = started.key;
+    const { key, migration } = started;
+    const text =
+      kind === "crypto"
+        ? { title: "bark-admin 暗号化の確認", body: `この通知をタップすると暗号化の確認が完了する\ndevice: ${id}` }
+        : migration !== null
+          ? {
+              title: "bark-admin 移行の確認",
+              body: `新しいサーバー名 ${currentHost} で登録された。タップすると移行が完了し、Bark のサーバーリストから ${migration.oldHost ?? "古いサーバー名"} を削除してよい\ndevice: ${id}`,
+            }
+          : { title: "bark-admin 受信の確認", body: `この通知をタップすると受信確認が完了する\ndevice: ${id}` };
+    const params = { ...text, url, id: noticeId(nonce) };
+    const encrypt = key !== null && (kind === "crypto" || migration !== null);
     return withUpstream(async () => {
-      const r =
-        kind === "crypto" && key !== null
-          ? await pushEncrypted({ title: "bark-admin 暗号化の確認", body: `この通知をタップすると暗号化の確認が完了する\ndevice: ${id}`, url }, { id, key })
-          : await bark.pushPlain(id, { title: "bark-admin 受信の確認", body: `この通知をタップすると受信確認が完了する\ndevice: ${id}`, url });
-      const sent = { ...r, encrypted: kind === "crypto" };
+      const r = encrypt ? await pushEncrypted(params, { id, key }) : await bark.pushPlain(id, params);
+      const sent = { ...r, encrypted: encrypt };
       if (r.status === 200) return json(200, { sent });
       return json(502, { error: `bark-server did not accept the confirm notification: ${r.message ?? `status ${r.status}`}`, sent });
     });
@@ -328,16 +343,21 @@ export function createApp(deps: AppDeps) {
 
   async function finishDeviceConfirm(id: string, kind: ConfirmKind, nonce: string): Promise<Response> {
     const at = now();
-    // 移行してきた端末の受信確認なら、移行元の旧端末をアーカイブする (移行の節)
-    const confirmed = await store.devices.update((cur) => {
+    // 移行してきた端末の受信確認なら、移行元の旧端末をアーカイブする (移行の節)。retired はこの確認でアーカイブした旧端末
+    const confirmed = await store.devices.update((cur): { next?: Devices; result: { device: DeviceRecord; retired: string | null } | null } => {
       const r = cur[id];
       const next = r === undefined ? null : finishConfirm(r, kind, nonce, at);
       if (next === null) return { result: null };
       const devices = { ...cur, [id]: next };
-      return { next: kind === "delivery" ? retireMigratedFrom(devices, next, at) : devices, result: next };
+      const from = kind === "delivery" ? next.migrated_from : undefined;
+      const retired = from !== undefined && cur[from]?.archived_at === null ? from : null;
+      return { next: kind === "delivery" ? retireMigratedFrom(devices, next, at) : devices, result: { device: next, retired } };
     });
     if (confirmed === null) return html(404, notFoundPageHtml("この確認リンクは使用済みか古い。確認を送り直す。", "確認リンクが見つからない"));
-    return html(200, confirmedPageHtml({ kind, deviceId: id, device: confirmed }));
+    // 確認できた通知と、アーカイブした旧端末に届いていた移行の案内を消す
+    await deleteNotice(id, noticeId(nonce));
+    if (confirmed.retired !== null) await deleteNotice(confirmed.retired, noticeId(migrateNoticeSeed(confirmed.retired)));
+    return html(200, confirmedPageHtml({ kind, deviceId: id, device: confirmed.device }));
   }
 
   // 公開名が古い端末に移行トークンを用意し、案内ページ (/add/m/<token>) を開く通知をその端末へ送る (鍵があれば暗号化)。
@@ -356,6 +376,8 @@ export function createApp(deps: AppDeps) {
       title: "bark-admin サーバー名の更新",
       body: `新しいサーバー名 ${currentHost} で登録し直す。タップして案内に従う\ndevice: ${id}`,
       url: migrateUrl(serverUrl, token),
+      // 送り直すと同じ id で前の案内を置き換え、移行が確認できたら消す
+      id: noticeId(migrateNoticeSeed(id)),
     };
     return withUpstream(async () => {
       const r = dev.crypto === null ? await bark.pushPlain(id, params) : await pushEncrypted(params, { id, key: dev.crypto.key });

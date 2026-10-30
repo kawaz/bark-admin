@@ -17,7 +17,12 @@ import { nodeDecrypt } from "./node-aes-gcm.ts";
 type Received = { method: string; path: string; search: string; body: string };
 const received: Received[] = [];
 const BodySchema = v.looseObject({ device_keys: v.optional(v.array(v.string())) });
-const SealedBodySchema = v.strictObject({ device_key: v.string(), ciphertext: v.string(), iv: v.string() });
+// id は暗号化しても平文で並べる (APNs の collapse id になる)
+const SealedBodySchema = v.strictObject({ device_key: v.string(), ciphertext: v.string(), iv: v.string(), id: v.optional(v.string()) });
+// 通知を消す送信 (平文の {id, delete})
+const DeleteBodySchema = v.strictObject({ device_key: v.string(), id: v.string(), delete: v.literal("1") });
+// true の間、偽 bark-server は通知を消す送信を受けない (消せなくても確認が成功することを試す)
+let failDelete = false;
 
 const fakeBark = Bun.serve({
   port: 0,
@@ -38,6 +43,7 @@ const fakeBark = Bun.serve({
       const keys = r.ok ? (r.value.device_keys ?? []) : [];
       // device_key 1 台の送信: 失敗は HTTP status と code が同じ値になる
       if (keys.length === 0) {
+        if (failDelete && body.includes('"delete":"1"')) return Response.json({ code: 500, message: "push failed: delete refused", timestamp: ts }, { status: 500 });
         if (body.includes('"device_key":"BADENC"')) return Response.json({ code: 400, message: "failed to get device token", timestamp: ts }, { status: 400 });
         return Response.json({ code: 200, message: "success", timestamp: ts });
       }
@@ -70,6 +76,7 @@ afterAll(() => {
 
 beforeEach(async () => {
   received.length = 0;
+  failDelete = false;
   whoisCalls.length = 0;
   clock = START;
   whoisResult = undefined;
@@ -117,6 +124,14 @@ async function setCrypto(id: string, key: string) {
 function sealedPushes() {
   return received.filter((r) => r.path === "/push").flatMap((r) => {
     const p = parseJsonWith(SealedBodySchema, r.body);
+    return p.ok ? [p.value] : [];
+  });
+}
+
+// 通知を消す送信
+function deletePushes() {
+  return received.filter((r) => r.path === "/push").flatMap((r) => {
+    const p = parseJsonWith(DeleteBodySchema, r.body);
     return p.ok ? [p.value] : [];
   });
 }
@@ -319,19 +334,27 @@ describe("devices API", () => {
     expect(sealed?.device_key).toBe("A");
     expect(received.at(-1)?.body).not.toContain(nonce);
     const url = `https://bark.example/bark-admin/api/devices/A/confirm/crypto/${nonce}`;
+    // 通知の id は平文にも並ぶので nonce とは別の値
+    const noticeId = sealed?.id ?? "";
+    expect(noticeId).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    expect(noticeId).not.toBe(nonce);
     expect(sealed && JSON.parse(nodeDecrypt(KEY_A, sealed.iv, sealed.ciphertext))).toEqual({
       title: "bark-admin 暗号化の確認",
       body: "この通知をタップすると暗号化の確認が完了する\ndevice: A",
       url,
+      id: noticeId,
     });
 
     // 違う nonce は 404 で状態を変えない
     const wrong = await fetch(`${base}/bark-admin/api/devices/A/confirm/crypto/WRONG${nonce.slice(5)}`);
     expect(wrong.status).toBe(404);
     expect((await store.devices.read())["A"]?.crypto).toEqual({ key: KEY_A, confirmed_at: null, pending_nonce: nonce });
+    expect(deletePushes()).toEqual([]);
 
     const ok = await fetch(`${base}/bark-admin/api/devices/A/confirm/crypto/${nonce}`);
     expect(ok.status).toBe(200);
+    // 確認できたら同じ id の通知を平文の {id, delete} で消す (bark-server は平文の delete だけをサイレントプッシュにする)
+    expect(deletePushes()).toEqual([{ device_key: "A", id: noticeId, delete: "1" }]);
     expect(ok.headers.get("content-type")).toContain("text/html");
     const page = await ok.text();
     expect(page).toContain("暗号化を確認できた");
@@ -363,11 +386,14 @@ describe("devices API", () => {
       title: "bark-admin 受信の確認",
       body: "この通知をタップすると受信確認が完了する\ndevice: A",
       url: `https://bark.example/bark-admin/api/devices/A/confirm/delivery/${nonce}`,
+      id: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/),
       device_key: "A",
     });
+    const noticeId = v.parse(v.object({ id: v.string() }), JSON.parse(push?.body ?? "")).id;
     expect(await (await fetch(`${base}/bark-admin/api/devices/A`)).json()).toMatchObject({ delivery: { confirmed_at: null } });
     const ok = await fetch(`${base}/bark-admin/api/devices/A/confirm/delivery/${nonce}`);
     expect(ok.status).toBe(200);
+    expect(deletePushes()).toEqual([{ device_key: "A", id: noticeId, delete: "1" }]);
     // 確認できたページは device_id (全文)・name / owner・kind と日時を出す (Bark のサーバー一覧の key と見比べる)
     const page = await ok.text();
     expect(page).toContain("受信を確認できた");
@@ -393,6 +419,17 @@ describe("devices API", () => {
     const [line] = (await (await fetch(`${base}/bark-admin/api/devices?name=iphone`)).text()).split("\n");
     expect(JSON.parse(line ?? "")).toMatchObject({ delivery: { confirmed_at: NOW } });
     expect(line).not.toContain("pending_nonce");
+  });
+
+  test("a failure to delete the notice does not stop the confirm", async () => {
+    failDelete = true;
+    await fetch(`${base}/bark-admin/api/devices/B/confirm/delivery`, { method: "POST" });
+    const nonce = (await store.devices.read())["B"]?.delivery?.pending_nonce ?? "";
+    const ok = await fetch(`${base}/bark-admin/api/devices/B/confirm/delivery/${nonce}`);
+    expect(ok.status).toBe(200);
+    expect(await ok.text()).toContain("受信を確認できた");
+    expect(deletePushes()).toHaveLength(1);
+    expect((await store.devices.read())["B"]?.delivery).toEqual({ confirmed_at: NOW, pending_nonce: null });
   });
 
   test("the confirmed page shows the crypto row in 3 states and the device info section when there is info", async () => {
@@ -736,7 +773,9 @@ describe("migration to the current public host", () => {
       title: "bark-admin サーバー名の更新",
       body: "新しいサーバー名 bark.example で登録し直す。タップして案内に従う\ndevice: A",
       url: `https://bark.example/bark-admin/add/m/${r.token}`,
+      id: sealed?.id,
     });
+    expect(sealed?.id).toMatch(/^[A-Za-z0-9_-]{22}$/);
   });
 
   test("a device without a key gets the guide in plain; an unused migration token is reused (with the current tags), not added", async () => {
@@ -748,6 +787,7 @@ describe("migration to the current public host", () => {
       title: "bark-admin サーバー名の更新",
       body: "新しいサーバー名 bark.example で登録し直す。タップして案内に従う\ndevice: B",
       url: `https://bark.example/bark-admin/add/m/${first.token}`,
+      id: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/),
       device_key: "B",
     });
     await post("/bark-admin/api/devices/B", { tags: { owner: "kawaz", name: "ipad2" } }, "PATCH");
@@ -802,7 +842,7 @@ describe("migration to the current public host", () => {
     expect(await notMigrate.text()).toContain('href="/bark-admin/"');
   });
 
-  test("registering with a migration token copies the tags and the key to the new device, marks the old one migrated_to, and sends the done notice (encrypted) to the new one", async () => {
+  test("registering with a migration token copies the tags and the key to the new device and marks the old one migrated_to, without sending a notice", async () => {
     await makeStale("A");
     await store.devices.update((cur) => {
       const a = cur["A"];
@@ -820,13 +860,8 @@ describe("migration to the current public host", () => {
     // 旧端末: 移行先と日時が付き、確認状態・公開名・アーカイブ状態は触らない
     expect(devices["A"]).toMatchObject({ migrated_to: "NEWKEY", migrated_at: NOW, archived_at: null, delivery: { confirmed_at: "t4" }, crypto: { confirmed_at: "t5" }, info: { server_host: "bark.old.example" } });
     expect((await store.registrations.read())[token]).toMatchObject({ used_by: "NEWKEY", used_at: NOW });
-    // 完了の案内は新しい端末へ、旧端末の鍵 (= 引き継いだ鍵) で暗号化して
-    const [sealed] = sealedPushes();
-    expect(sealed?.device_key).toBe("NEWKEY");
-    expect(sealed && JSON.parse(nodeDecrypt(KEY_A, sealed.iv, sealed.ciphertext))).toEqual({
-      title: "bark-admin 移行完了",
-      body: "この端末は bark.example で登録された。Bark のサーバーリストから bark.old.example を削除してよい\ndevice: NEWKEY",
-    });
+    // 登録の時には通知を送らない (完了の案内は案内ページが送る受信確認が兼ねる)
+    expect(received.filter((r) => r.path === "/push")).toEqual([]);
     // 詳細・一覧の API に migrated_to / migrated_at が出る
     expect(await (await fetch(`${base}/bark-admin/api/devices/A`)).json()).toMatchObject({ migrated_to: "NEWKEY", migrated_at: NOW });
     expect(await (await fetch(`${base}/bark-admin/api/devices/NEWKEY`)).json()).toMatchObject({ migrated_to: null, migrated_at: null });
@@ -887,16 +922,57 @@ describe("migration to the current public host", () => {
     expect(devices["P1"]?.migrated_from).toBeUndefined();
   });
 
-  test("a device without a key: the new device has no key and the done notice is plain", async () => {
+  test("the first delivery confirm of a migrated device is the one migration notice, encrypted with the carried key; tapping it archives the old device and deletes both notices", async () => {
+    await makeStale("A");
+    await setCrypto("A", KEY_A);
+    const guide = await migrate("A");
+    const guideId = sealedPushes()[0]?.id ?? "";
+    await fetch(`${base}/r/${guide.token}/register?devicetoken=t-new&key=A2`, { headers: { host: "bark.example" } });
+    received.length = 0;
+    const res = await fetch(`${base}/bark-admin/api/devices/A2/confirm/delivery`, { method: "POST" });
+    expect(await res.json()).toEqual({ sent: { device_id: "A2", status: 200, encrypted: true } });
+    const nonce = (await store.devices.read())["A2"]?.delivery?.pending_nonce ?? "";
+    // 送るのは 1 通だけで、移行の文面
+    const pushes = received.filter((r) => r.path === "/push");
+    expect(pushes).toHaveLength(1);
+    const [sealed] = sealedPushes();
+    expect(sealed?.device_key).toBe("A2");
+    expect(pushes[0]?.body).not.toContain(nonce);
+    expect(sealed && JSON.parse(nodeDecrypt(KEY_A, sealed.iv, sealed.ciphertext))).toEqual({
+      title: "bark-admin 移行の確認",
+      body: "新しいサーバー名 bark.example で登録された。タップすると移行が完了し、Bark のサーバーリストから bark.old.example を削除してよい\ndevice: A2",
+      url: `https://bark.example/bark-admin/api/devices/A2/confirm/delivery/${nonce}`,
+      id: sealed?.id,
+    });
+    received.length = 0;
+    expect((await fetch(`${base}/bark-admin/api/devices/A2/confirm/delivery/${nonce}`)).status).toBe(200);
+    expect((await store.devices.read())["A"]?.archived_at).toBe(NOW);
+    // 確認の通知 (新しい端末) と、旧端末に届いていた移行の案内を消す
+    expect(deletePushes()).toEqual([
+      { device_key: "A2", id: sealed?.id ?? "", delete: "1" },
+      { device_key: "A", id: guideId, delete: "1" },
+    ]);
+    // 2 回目以降の受信確認はふつうの文面 (平文)
+    received.length = 0;
+    await fetch(`${base}/bark-admin/api/devices/A2/confirm/delivery`, { method: "POST" });
+    expect(JSON.parse(received.at(-1)?.body ?? "")).toMatchObject({ title: "bark-admin 受信の確認", device_key: "A2" });
+  });
+
+  test("a device without a key: the new device has no key and the migration notice is plain", async () => {
     await makeStale("B");
     const { token } = await migrate("B");
-    received.length = 0;
     await fetch(`${base}/r/${token}/register?devicetoken=t-new&key=B2`, { headers: { host: "bark.example" } });
     expect((await store.devices.read())["B2"]).toMatchObject({ tags: { owner: "kawaz", name: "ipad" }, crypto: null });
-    const push = received.find((r) => r.path === "/push");
-    expect(JSON.parse(push?.body ?? "")).toEqual({
-      title: "bark-admin 移行完了",
-      body: "この端末は bark.example で登録された。Bark のサーバーリストから bark.old.example を削除してよい\ndevice: B2",
+    received.length = 0;
+    const res = await fetch(`${base}/bark-admin/api/devices/B2/confirm/delivery`, { method: "POST" });
+    expect(await res.json()).toEqual({ sent: { device_id: "B2", status: 200, encrypted: false } });
+    const nonce = (await store.devices.read())["B2"]?.delivery?.pending_nonce ?? "";
+    expect(received.filter((r) => r.path === "/push")).toHaveLength(1);
+    expect(JSON.parse(received.at(-1)?.body ?? "")).toEqual({
+      title: "bark-admin 移行の確認",
+      body: "新しいサーバー名 bark.example で登録された。タップすると移行が完了し、Bark のサーバーリストから bark.old.example を削除してよい\ndevice: B2",
+      url: `https://bark.example/bark-admin/api/devices/B2/confirm/delivery/${nonce}`,
+      id: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/),
       device_key: "B2",
     });
   });
