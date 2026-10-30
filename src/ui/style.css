@@ -649,20 +649,23 @@ details.more[open] > summary svg { transform: rotate(-90deg); }
 .rows { margin: 0; }
 .rows > .row + .row { border-top: 1px solid var(--line); }
 
+/* 値が見出しの横に収まらなければ (長い UA 等) 値だけ次の行へ回す */
 .row {
-  display: grid;
-  grid-template-columns: minmax(84px, auto) minmax(0, 1fr);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
   gap: 4px 16px;
   align-items: baseline;
   padding: 14px 18px;
 }
 
-.row dt { color: var(--ink-2); font-size: 15px; }
-.row dd { margin: 0; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px 12px; text-align: right; min-width: 0; }
+.row dt { color: var(--ink-2); font-size: 15px; flex: none; }
+.row dd { margin: 0; flex: 1 1 auto; display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px 12px; text-align: right; min-width: 0; }
 .row .v { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
 .row .v.mono, .row .v code { font-family: var(--mono); font-weight: 500; font-size: 15px; }
 .row .v .old { color: var(--warn); }
-.row .st { white-space: normal; }
+.row .st { display: inline; white-space: normal; }
+.row .st::before { display: inline-block; margin-right: 6px; vertical-align: 1px; }
 .row .row-note { flex-basis: 100%; color: var(--ink-2); font-size: 13px; }
 .row.changed { background: color-mix(in srgb, var(--ok) 10%, var(--surface)); box-shadow: inset 4px 0 0 var(--ok); }
 
