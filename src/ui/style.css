@@ -379,7 +379,7 @@ button.chip[aria-pressed="true"] .k { color: var(--signal-ink); }
 .match .count { font-size: 28px; line-height: 1; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .match .count small { font-size: 16px; font-weight: 700; margin-left: 2px; }
 
-.devices { list-style: none; margin: 0; padding: 0; container-type: inline-size; }
+.devices { list-style: none; margin: 0; padding: 0; }
 .devices > li + li { border-top: 1px solid var(--line); }
 
 .device {
@@ -423,7 +423,9 @@ button.chip[aria-pressed="true"] .k { color: var(--signal-ink); }
 .device.archived > :is(.glyph, .meta, .chev) { pointer-events: none; }
 .device.archived .name, .device.archived .owner { color: var(--ink-3); }
 
-@container (min-width: 640px) {
+/* 一覧の幅が 640px 以上 (TOP は 1 列なので viewport 672px 以上) なら状態ラベルを右の列に出す。
+   Design rationale: container query にしない。中身の高さで決まる container の中身を描き直すと、WebKit がスクロール位置を 0 に戻す (playwright の WebKit 26.6 で観測。一覧の読み直しのたびに先頭へ飛ぶ) */
+@media (min-width: 672px) {
   .device {
     grid-template-columns: 48px minmax(0, 1.5fr) minmax(0, 1fr) 20px;
     grid-template-areas:
@@ -434,19 +436,21 @@ button.chip[aria-pressed="true"] .k { color: var(--signal-ink); }
   .device > .statuses { flex-direction: column; align-items: flex-start; gap: 6px; padding-top: 4px; }
 }
 
-/* ---------- ダイアログ (狭い幅は下から出るシート、広い幅は中央) ---------- */
+/* ---------- ダイアログ (狭い幅は全画面、広い幅は中央) ----------
+   狭い幅では上下に隙間を残さず viewport いっぱいにし、専用のページへ移ったように見せる (上端に「戻る」と題、中身だけスクロール)。
+   開いている間は裏の画面をスクロールさせない (html.scroll-locked、src/client/dom.ts の setupDialogs) */
 
 .sheet {
   width: 100%;
   max-width: 100%;
-  max-height: calc(100dvh - 24px);
-  margin: auto auto 0;
+  height: 100dvh;
+  max-height: 100dvh;
+  margin: 0;
   padding: 0;
   border: 0;
-  border-radius: 24px 24px 0 0;
+  border-radius: 0;
   background: var(--bg);
   color: var(--ink);
-  box-shadow: 0 -10px 40px -10px rgba(0, 0, 0, 0.4);
   overscroll-behavior: contain;
 }
 
@@ -456,18 +460,43 @@ button.chip[aria-pressed="true"] .k { color: var(--signal-ink); }
 .sheet-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 10px 10px 20px;
+  gap: 4px;
+  padding: calc(6px + env(safe-area-inset-top)) var(--gutter) 8px 6px;
   border-bottom: 1px solid var(--line);
+  background: var(--bg);
 }
 
-.sheet-head h2 { font-size: 20px; font-weight: 750; }
+.sheet-head h2 { font-size: 20px; font-weight: 750; min-width: 0; overflow-wrap: anywhere; }
+
+.sheet-close {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 44px;
+  padding: 0 10px 0 4px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--signal-text);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+  flex: none;
+}
+
+.sheet-close svg { width: 22px; height: 22px; }
+.sheet-close .x { display: none; }
+/* 開いた時のフォーカスは見出しに置く (読み上げが題から始まり、閉じるボタンに輪が出ない) */
+.sheet-head h2:focus { outline: none; }
+
 .sheet .section-head h2 { font-size: 17px; }
 .sheet :is(input[type="text"], input[type="url"], input[type="number"], textarea, select) { background: var(--surface); }
 
 .sheet-body {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 18px var(--gutter) calc(18px + env(safe-area-inset-bottom));
   display: grid;
   gap: 18px;
@@ -493,17 +522,26 @@ button.chip[aria-pressed="true"] .k { color: var(--signal-ink); }
 @media (min-width: 640px) {
   .sheet {
     width: min(560px, calc(100% - 48px));
+    height: auto;
     max-height: calc(100dvh - 64px);
     margin: auto;
     border-radius: var(--r-section);
+    box-shadow: 0 20px 50px -12px rgba(0, 0, 0, 0.45);
   }
   .sheet-wide { width: min(640px, calc(100% - 48px)); }
+  .sheet-head { justify-content: space-between; padding: 14px 10px 10px 20px; border-radius: var(--r-section) var(--r-section) 0 0; }
+  .sheet-close { order: 2; width: 44px; padding: 0; justify-content: center; color: var(--ink-2); }
+  .sheet-close .back, .sheet-close .label { display: none; }
+  .sheet-close .x { display: block; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .sheet[open] { animation: sheet-in 0.22s ease-out; }
-  @keyframes sheet-in { from { transform: translateY(24px); opacity: 0; } }
+  .sheet[open] { animation: sheet-in 0.2s ease-out; }
+  @keyframes sheet-in { from { transform: translateY(16px); opacity: 0; } }
 }
+
+/* 開いているダイアログの裏をスクロールさせない (ダイアログの中のスクロールは overscroll-behavior: contain で裏へ伝えない) */
+html.scroll-locked { overflow: hidden; }
 
 /* ---------- 通知を送る ---------- */
 

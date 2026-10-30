@@ -165,9 +165,10 @@ export function segmented(o: { name: string; label: Part; param?: string; option
 
 // ---------- ダイアログ ----------
 
-// 閉じるボタンと見出しを持つ modal。外側のクリックと Esc でも閉じる (closedby="any")
+// 閉じるボタンと見出しを持つ modal。狭い幅は全画面で左上に「戻る」、広い幅は中央で右上に ×。外側のクリックと Esc でも閉じる。
+// 開く・閉じる・外側のクリック・裏のスクロール止めは src/client/dom.ts の setupDialogs が受け持つ (commandfor は意味づけとして残す)
 export function dialog(o: { id: string; title: Part; body: Part; wide?: boolean }): Html {
-  return html`<dialog id="${o.id}" class="sheet${o.wide === true ? " sheet-wide" : ""}" closedby="any" aria-labelledby="${o.id}-title"><div class="sheet-head"><h2 id="${o.id}-title">${o.title}</h2><button type="button" class="btn btn-quiet icon-only" commandfor="${o.id}" command="close" aria-label="閉じる">${icon("close")}</button></div><div class="sheet-body">${o.body}</div></dialog>`;
+  return html`<dialog id="${o.id}" class="sheet${o.wide === true ? " sheet-wide" : ""}" closedby="any" aria-labelledby="${o.id}-title"><div class="sheet-head"><button type="button" class="sheet-close" commandfor="${o.id}" command="close" aria-label="閉じる">${icon("back", "i back")}<span class="label">戻る</span>${icon("close", "i x")}</button><h2 id="${o.id}-title" tabindex="-1" autofocus>${o.title}</h2></div><div class="sheet-body">${o.body}</div></dialog>`;
 }
 
 // ---------- ステップ (招待ページ) ----------

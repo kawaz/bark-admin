@@ -3,7 +3,7 @@ import { CRYPTO_LABELS, cryptoLevel, formatAt, hostState, type NameOf } from "..
 import { html } from "../ui/html.ts";
 import { deviceAlerts, deviceArchivedBand, deviceHero, deviceInfoRows, deviceStateRows, deviceTags } from "../ui/views.ts";
 import { ConfigSchema, DeviceViewSchema, failure, readJson, type DeviceView } from "./api.ts";
-import { byId, closeDialog, copyText, formatTagLines, parseTagLines, setHtml, writeClipboard } from "./dom.ts";
+import { byId, closeDialog, copyText, formatTagLines, parseTagLines, setHtml, setupDialogs, writeClipboard } from "./dom.ts";
 
 // 端末の詳細: 基本情報 (見出し・状態の行・タグ・端末情報) を描き、操作は状態の行やタグの横のボタンが開くダイアログで行う。
 // 鍵は暗号化のダイアログで「表示」を押すまで伏せる
@@ -115,6 +115,7 @@ async function loadName(id: string | null): Promise<void> {
   if (r.ok && r.value.tags["name"] !== undefined) names.set(id, r.value.tags["name"]);
 }
 
+setupDialogs();
 await call("GET");
 
 // ---------- タグ ----------

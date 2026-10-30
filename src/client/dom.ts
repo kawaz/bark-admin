@@ -87,3 +87,42 @@ export async function copyText(button: HTMLButtonElement, text: string | Promise
 export function closeDialog(id: string): void {
   byId(id, HTMLDialogElement).close();
 }
+
+// ダイアログの開閉をこの 1 か所で受け持つ。
+// - commandfor / command のボタンは JS で showModal() / close() する (Invoker Commands を持たないブラウザでも必ず modal で開き、裏の画面が inert になる)。ボタンの既定の動き (ブラウザの Invoker Commands) は止めて二重に開かない
+// - 外側 (::backdrop) のクリックで閉じる (closedby="any" を持たないブラウザの分も)
+// - 開いている間は裏の画面のスクロールを止める (html.scroll-locked)。
+//   Design rationale: iOS 向けの定番の body を position: fixed にする止め方は、閉じた後に WebKit がスクロール位置を 0 へ戻してしまい (playwright の WebKit 26.6 で観測)、元の位置へ戻せないので使わない
+export function setupDialogs(): void {
+  const root = document.documentElement;
+  const lock = () => root.classList.add("scroll-locked");
+  const unlock = () => {
+    if (document.querySelector("dialog[open]") === null) root.classList.remove("scroll-locked");
+  };
+
+  document.addEventListener("click", (ev) => {
+    if (!(ev.target instanceof Element)) return;
+    const button = ev.target.closest("button[commandfor]");
+    if (!(button instanceof HTMLButtonElement)) return;
+    const target = document.getElementById(button.getAttribute("commandfor") ?? "");
+    if (!(target instanceof HTMLDialogElement)) return;
+    const command = button.getAttribute("command");
+    if (command !== "show-modal" && command !== "close") return;
+    ev.preventDefault();
+    if (command === "close") target.close();
+    else if (!target.open) {
+      lock();
+      target.showModal();
+    }
+  });
+
+  for (const d of document.querySelectorAll("dialog")) {
+    d.addEventListener("close", unlock);
+    // 外側のクリックは dialog 自身に届く (中身は dialog の子)。中身の外の座標なら閉じる
+    d.addEventListener("click", (ev) => {
+      if (ev.target !== d) return;
+      const r = d.getBoundingClientRect();
+      if (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom) d.close();
+    });
+  }
+}

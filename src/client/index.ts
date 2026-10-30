@@ -4,9 +4,11 @@ import { chip, chips, icon, tagChips } from "../ui/components.ts";
 import { html } from "../ui/html.ts";
 import { deviceRow, inviteItem, inviteQrUrl, PRIMARY_FIELDS, type TagMatch } from "../ui/views.ts";
 import { ConfigSchema, DeviceListItemSchema, failure, InviteSchema, postJson, PushResultSchema, readJson, readJsonl, typedBody, type DeviceListItem, type Fetched, type Invite, type PushResult } from "./api.ts";
-import { byId, copyText, formatTagLines, parseTagLines, setHtml } from "./dom.ts";
+import { byId, copyText, formatTagLines, parseTagLines, setHtml, setupDialogs } from "./dom.ts";
 
 // TOP: 宛先 (フィルタ) と端末の一覧。通知テストとデバイスの追加はダイアログ (#send-dialog / #add-dialog) で開く
+
+setupDialogs();
 
 const filterInput = byId("filter", HTMLTextAreaElement);
 const filterError = byId("filter-error", HTMLElement);
