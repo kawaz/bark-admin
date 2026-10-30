@@ -337,8 +337,8 @@ describe("devices API", () => {
     expect(page).toContain("暗号化を確認できた");
     expect(page).toContain("<code>A</code>");
     // 今回確認した暗号化の行を強調し、日時はその行に出す
-    expect(page).toContain(`<dt class="changed">暗号化</dt><dd class="changed">有効・確認済み <time datetime="${NOW}">`);
-    expect(page).toContain("<dt>受信確認</dt><dd>未確認</dd>");
+    expect(page).toContain(`<div class="row changed"><dt>暗号化</dt><dd><span class="v"><span class="st st-ok">有効・確認済み <time datetime="${NOW}"`);
+    expect(page).toContain('<div class="row"><dt>受信確認</dt><dd><span class="v"><span class="st st-info">未確認</span>');
     expect((await store.devices.read())["A"]?.crypto).toEqual({ key: KEY_A, confirmed_at: NOW, pending_nonce: null });
     expect(await (await fetch(`${base}/bark-admin/api/devices/A`)).json()).toMatchObject({ crypto: { key: KEY_A, confirmed_at: NOW } });
 
@@ -379,11 +379,11 @@ describe("devices API", () => {
     expect(page).toContain("登録簿が端末ごとに持つ固有の項目");
     expect(page).toContain("登録簿に保存、自由に直せる");
     expect(page).not.toContain("端末情報");
-    expect(page).toContain('<li class="tag">owner=kawaz</li><li class="tag">name=iphone</li>');
-    expect(page).toContain(`<dt>registered_at</dt><dd><time datetime="t0">`);
-    expect(page).toContain(`<dt class="changed">受信確認</dt><dd class="changed">確認済み <time datetime="${NOW}">`);
-    expect(page).toContain("<dt>暗号化</dt><dd>有効・未確認</dd>");
-    expect(page).toContain('<a class="button open" href="/bark-admin/devices/A">この端末の設定を開く</a>');
+    expect(page).toContain('<li><span class="chip"><span class="k">owner</span><span class="v">kawaz</span></span></li><li><span class="chip"><span class="k">name</span><span class="v">iphone</span></span></li>');
+    expect(page).toContain(`<dt>登録日時</dt><dd><span class="v"><time datetime="t0"`);
+    expect(page).toContain(`<div class="row changed"><dt>受信確認</dt><dd><span class="v"><span class="st st-ok">確認済み <time datetime="${NOW}"`);
+    expect(page).toContain('<div class="row"><dt>暗号化</dt><dd><span class="v"><span class="st st-info">有効・未確認</span>');
+    expect(page).toContain('<a class="btn btn-primary btn-block" href="/bark-admin/devices/A">この端末の設定を開く</a>');
     // 使用済みの確認リンクは 404 の HTML で、TOP へのリンクを置く
     const used = await fetch(`${base}/bark-admin/api/devices/A/confirm/delivery/${nonce}`);
     expect(used.status).toBe(404);
@@ -402,21 +402,21 @@ describe("devices API", () => {
       return (await fetch(`${base}/bark-admin/api/devices/${id}/confirm/delivery/${nonce}`)).text();
     };
     // 無効
-    expect(await confirmPage("B")).toContain("<dt>暗号化</dt><dd>無効</dd>");
+    expect(await confirmPage("B")).toContain('<dt>暗号化</dt><dd><span class="v"><span class="st st-muted">無効</span>');
     // 有効・未確認
     await setCrypto("B", KEY_B);
-    expect(await confirmPage("B")).toContain("<dt>暗号化</dt><dd>有効・未確認</dd>");
+    expect(await confirmPage("B")).toContain('<dt>暗号化</dt><dd><span class="v"><span class="st st-info">有効・未確認</span>');
     // 有効・確認済み (日時つき)
     await fetch(`${base}/bark-admin/api/devices/B/confirm/crypto`, { method: "POST" });
     const cn = (await store.devices.read())["B"]?.crypto?.pending_nonce ?? "";
     await fetch(`${base}/bark-admin/api/devices/B/confirm/crypto/${cn}`);
-    expect(await confirmPage("B")).toContain(`<dt>暗号化</dt><dd>有効・確認済み <time datetime="${NOW}">`);
+    expect(await confirmPage("B")).toContain(`<dt>暗号化</dt><dd><span class="v"><span class="st st-ok">有効・確認済み <time datetime="${NOW}"`);
     // 端末情報 (os_version / ts_hostname) があれば節を出す
     await fetch(`${base}/register?devicetoken=tb2&key=B`, { headers: { "user-agent": "Bark/1.6.4 (me.fin.bark; build:8; iOS 26.7.1) Alamofire/5.10.2" } });
     const withInfo = await confirmPage("B");
     expect(withInfo).toContain('<h2 id="info-heading">端末情報</h2>');
     expect(withInfo).toContain("Bark アプリが登録するたびに上書きされる");
-    expect(withInfo).toContain("<dt>os_version</dt><dd>iOS 26.7.1</dd>");
+    expect(withInfo).toContain('<dt>os_version</dt><dd><span class="v mono">iOS 26.7.1</span>');
   });
 
   test("delivery and crypto confirms are independent: one kind's nonce does not confirm the other", async () => {
@@ -503,7 +503,7 @@ describe("invites and registration tokens", () => {
     expect(first.page).not.toContain(first.key ?? "-");
     expect(first.page).toContain("••••••••");
     // 「すべて済んだ」で出す詳細ページへのリンクの置き場 (href は登録を見つけてから add.js が入れる)
-    expect(first.page).toContain('<a id="device-link" class="button open" hidden>この端末の設定を開く</a>');
+    expect(first.page).toContain('<a id="device-link" class="btn btn-primary btn-block" hidden>この端末の設定を開く</a>');
     expect((await store.registrations.read())[first.token]).toMatchObject({ invite: inv.invite, crypto: { key: first.key }, used_by: null, used_at: null });
 
     expect((await fetch(`${base}/r/${first.token}/register?devicetoken=t1&key=E1`)).status).toBe(200);
@@ -789,7 +789,7 @@ describe("migration to the current public host", () => {
     expect(page).not.toContain('id="step-crypto"');
     expect(page).not.toContain("暗号化キーをコピー");
     expect(page).not.toContain(KEY_A);
-    expect(page).toContain('<li class="tag">owner=kawaz</li><li class="tag">name=iphone</li>');
+    expect(page).toContain('<li><span class="chip"><span class="k">owner</span><span class="v">kawaz</span></span></li><li><span class="chip"><span class="k">name</span><span class="v">iphone</span></span></li>');
     expect(page).toContain("bark.old.example を削除してよい");
     expect(page).toMatch(/\/bark-admin\/assets\/add\.js\?v=[0-9a-f]{8}"/);
     // 開いてもトークンは増えない
@@ -1080,7 +1080,7 @@ describe("routing", () => {
     expect((await fetch(`${base}/bark-admin/assets/index.js`)).status).toBe(200);
   });
 
-  test("HTML refers to assets with ?v=<hash>, JS imports are versioned too; HTML and assets are no-cache with an ETag (304 when unchanged)", async () => {
+  test("HTML refers to assets with ?v=<hash>, each page script is one bundle without imports; HTML and assets are no-cache with an ETag (304 when unchanged)", async () => {
     const versioned = /\/bark-admin\/assets\/device\.js\?v=[0-9a-f]{8}"/;
     const detail = await fetch(`${base}/bark-admin/devices/A`);
     const html = await detail.text();
@@ -1098,7 +1098,8 @@ describe("routing", () => {
     expect(js.headers.get("content-type")).toContain("text/javascript");
     const etag = js.headers.get("etag") ?? "";
     expect(etag).toMatch(/^"[0-9a-f]{16}"$/);
-    expect(await js.text()).toMatch(/from "\.\/common\.js\?v=[0-9a-f]{8}"/);
+    // bundle は import を持たない 1 本 (版のずれた別ファイルを読むことが無い)
+    expect(await js.text()).not.toMatch(/\bfrom\s*"\.\//);
     const again = await fetch(`${base}/bark-admin/assets/device.js`, { headers: { "if-none-match": etag } });
     expect(again.status).toBe(304);
     // URL の版は ETag の先頭と同じ

@@ -3,7 +3,7 @@ import type { ConfirmKind, CryptoKeyOnly, DeviceCrypto, DeviceInfo, DeviceListIt
 // 登録簿の操作 (純粋関数)。永続化は store.ts が受け持つ。
 
 // device フィルタの値 1 つの解釈。`*v*` (両端が `*`) は v を含む、`*` (と `**`) はキーがあれば当たる、それ以外は完全一致。
-// `v*` / `*v` の `*` は文字そのもの。否定やエスケープは持たない (public/assets/common.js の matchTag はこの写し)
+// `v*` / `*v` の `*` は文字そのもの。否定やエスケープは持たない (管理画面のブラウザ側も src/client/index.ts からこれを使う)
 export function matchTag(value: string | undefined, pattern: string): boolean {
   if (value === undefined) return false;
   if (pattern === "*") return true;

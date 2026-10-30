@@ -1,5 +1,7 @@
+import type { StepMode } from "../ui/components.ts";
+
 // 招待ページの段の状態遷移 (純粋関数)。登録トークンの状態 (GET /bark-admin/api/registrations/:token) だけから、
-// 各段の表示・1 段目のボタンの有無・今の段に出す案内を決める。DOM は add.js が持つ。型は add-state.d.ts
+// 各段の表示・1 段目のボタンの有無・今の段に出す案内を決める。DOM は add.ts が持つ
 
 export const MESSAGES = {
   unusable: "この招待は使えない。QR を読み直す",
@@ -9,17 +11,33 @@ export const MESSAGES = {
   cryptoDone: "暗号化の確認が完了した。すべて済んだ",
 };
 
-// r.state: unused / used / expired / invite-deleted (API) と、トークンが見つからない (404) の gone。
+// state: unused / used / expired / invite-deleted (API) と、トークンが見つからない (404) の gone
+export type FlowStatus = {
+  state: "unused" | "used" | "expired" | "invite-deleted" | "gone";
+  device?: { delivery: { confirmed_at: string | null }; crypto: { confirmed_at: string | null } | null } | null;
+};
+
+export type FlowView = {
+  add: StepMode;
+  delivery: StepMode;
+  crypto: StepMode;
+  addButton: "enabled" | "removed";
+  current: "add" | "delivery" | "crypto" | null;
+  message: string;
+  finished: boolean;
+  deviceLink: boolean;
+};
+
 // 1 段目のボタンは登録 (used) を見つけるまで押せる (Bark の未導入・中断から戻ってもやり直せるように)。登録後は消す
-export function flowView(r, hasCrypto) {
-  const base = { add: "current", delivery: "later", crypto: "later", addButton: "enabled", current: "add", message: "", finished: false, deviceLink: false };
+export function flowView(r: FlowStatus, hasCrypto: boolean): FlowView {
+  const base: FlowView = { add: "current", delivery: "later", crypto: "later", addButton: "enabled", current: "add", message: "", finished: false, deviceLink: false };
   if (r.state === "expired" || r.state === "invite-deleted" || r.state === "gone") {
     return { ...base, addButton: "removed", message: MESSAGES.unusable, finished: true };
   }
   if (r.state !== "used") return base;
-  const registered = { ...base, add: "done", addButton: "removed" };
+  const registered: FlowView = { ...base, add: "done", addButton: "removed" };
   if ((r.device?.delivery.confirmed_at ?? null) === null) return { ...registered, delivery: "current", current: "delivery", message: MESSAGES.registered };
-  const delivered = { ...registered, delivery: "done" };
+  const delivered: FlowView = { ...registered, delivery: "done" };
   if (!hasCrypto) return { ...delivered, current: null, message: MESSAGES.allDone, finished: true, deviceLink: true };
   if ((r.device?.crypto?.confirmed_at ?? null) === null) return { ...delivered, crypto: "current", current: "crypto", message: MESSAGES.delivered };
   return { ...delivered, crypto: "done", current: null, message: MESSAGES.cryptoDone, finished: true, deviceLink: true };

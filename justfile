@@ -19,7 +19,7 @@ run:
 
 # oxlint + tsc + justfile format check
 lint:
-    bunx oxlint --deny-warnings src test public
+    bunx oxlint --deny-warnings src test
     bunx tsc -p .
     just --unstable --fmt --check
 

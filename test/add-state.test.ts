@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { MESSAGES, flowView, type RegistrationStatus } from "../public/assets/add-state.js";
+import { MESSAGES, flowView, type FlowStatus } from "../src/client/add-state.ts";
 
-const used = (delivery: string | null, crypto: string | null | "none"): RegistrationStatus => ({
+const used = (delivery: string | null, crypto: string | null | "none"): FlowStatus => ({
   state: "used",
   device: { delivery: { confirmed_at: delivery }, crypto: crypto === "none" ? null : { confirmed_at: crypto } },
 });

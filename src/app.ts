@@ -1,11 +1,12 @@
 import QRCode from "qrcode";
 import * as v from "valibot";
-import { assetRoutes, staticHtml } from "./assets.ts";
+import { assetRoutes, htmlRoute } from "./assets.ts";
 import { clientIp, LOOPBACK, type Cidr } from "./client-ip.ts";
 import { BarkServer, RegisterResponseSchema, UpstreamError, type PushResult } from "./bark-server.ts";
 import { autoTags, observeRegistration, tailscaleWhois, type TailnetInfo, type Whois } from "./device-info.ts";
 import { gateToken, issueMigration, issueRegistration, registrationState, sourceExists } from "./invites.ts";
-import { addPageHtml, confirmedPageHtml, migratePageHtml, notFoundPageHtml } from "./pages/add.ts";
+import { addPageHtml, confirmedPageHtml, devicePageHtml, indexPageHtml, migratePageHtml, notFoundPageHtml } from "./ui/pages.ts";
+import { ADMIN } from "./ui/views.ts";
 import { parseJsonWith, parseWith } from "./parse.ts";
 import { encryptForBark, newCryptoIv, newCryptoKey, randomAlnum } from "./push-crypto.ts";
 import {
@@ -45,7 +46,7 @@ import { localIso } from "./time.ts";
 //   中身を見るのは /register の応答を登録簿へ写す 1 点だけ
 // - /bark-admin/: 管理面 (UI / 管理 API / タグ宛先の送信 API)
 
-export const ADMIN = "/bark-admin";
+export { ADMIN };
 
 export type AppDeps = {
   serverUrl: string;
@@ -481,9 +482,9 @@ export function createApp(deps: AppDeps) {
   const routes = {
     "/": Response.redirect(`${ADMIN}/`, 302),
     [ADMIN]: Response.redirect(`${ADMIN}/`, 302),
-    // HTML と静的ファイルは版つき URL・no-cache・ETag で配る (src/assets.ts)
-    [`${ADMIN}/`]: staticHtml("index.html"),
-    [`${ADMIN}/devices/:id`]: staticHtml("device.html"),
+    // HTML と静的ファイルは版つき URL・no-cache・ETag で配る (src/assets.ts)。TOP と詳細の HTML は枠だけで、中身は API の値でブラウザが描く (src/ui/pages.ts)
+    [`${ADMIN}/`]: htmlRoute(indexPageHtml(currentHost)),
+    [`${ADMIN}/devices/:id`]: htmlRoute(devicePageHtml()),
     ...assetRoutes(),
     [`${ADMIN}/add/:invite`]: { GET: (req: Bun.BunRequest<"/bark-admin/add/:invite">) => addPage(req, req.params.invite) },
     [`${ADMIN}/add/m/:token`]: { GET: (req: Bun.BunRequest<"/bark-admin/add/m/:token">) => migratePage(req.params.token) },
