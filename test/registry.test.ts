@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { archiveDevice, finishConfirm, listItem, markMigrated, matchTag, matchTags, mergeTags, patchDevice, resolveTargets, selectDevices, startConfirm, upsertRegistration, view } from "../src/registry.ts";
+import { archiveDevice, finishConfirm, listItem, markMigrated, matchTag, matchTags, mergeTags, patchDevice, resolveTargets, retireMigratedFrom, selectDevices, startConfirm, upsertRegistration, view } from "../src/registry.ts";
 import type { Devices } from "../src/schema/registry.ts";
 
 const devices: Devices = {
@@ -69,7 +69,7 @@ describe("selectDevices", () => {
   });
   test("view carries device_id", () => {
     expect(selectDevices(devices, { name: "iphone" }, false)).toEqual([
-      { device_id: "A", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone", family: "kawazu" }, crypto: null, info: {}, delivery: { confirmed_at: null }, migrated_to: null, migrated_at: null },
+      { device_id: "A", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone", family: "kawazu" }, crypto: null, info: {}, delivery: { confirmed_at: null }, migrated_to: null, migrated_at: null, migrated_from: null },
     ]);
   });
 });
@@ -104,8 +104,21 @@ describe("markMigrated", () => {
     const once = markMigrated(devices, "A", "E", "t2");
     expect(once["A"]).toMatchObject({ migrated_to: "E", migrated_at: "t2", archived_at: null });
     expect(markMigrated(once, "A", "F", "t3")["A"]).toMatchObject({ migrated_to: "E", migrated_at: "t2" });
-    expect(markMigrated(devices, "NOPE", "E", "t2")).toBe(devices);
+    expect(markMigrated(devices, "NOPE", "E", "t2")).toEqual(devices);
     expect(markMigrated(devices, "A", "A", "t2")).toBe(devices);
+    // 新しい端末には移行元が付く
+    expect(markMigrated(devices, "A", "B", "t2")["B"]).toMatchObject({ migrated_from: "A" });
+  });
+});
+
+describe("retireMigratedFrom", () => {
+  test("the confirmed device's migrated_from is archived; an already archived one keeps its date; no migrated_from changes nothing", () => {
+    const b = devices["B"];
+    if (b === undefined) throw new Error("fixture B");
+    expect(retireMigratedFrom(devices, { ...b, migrated_from: "A" }, "t2")["A"]?.archived_at).toBe("t2");
+    expect(retireMigratedFrom(devices, { ...b, migrated_from: "D" }, "t2")["D"]?.archived_at).toBe("t1");
+    expect(retireMigratedFrom(devices, b, "t2")).toBe(devices);
+    expect(retireMigratedFrom(devices, { ...b, migrated_from: "NOPE" }, "t2")).toBe(devices);
   });
 });
 

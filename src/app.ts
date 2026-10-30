@@ -15,6 +15,7 @@ import {
   listItem,
   markMigrated,
   patchDevice,
+  retireMigratedFrom,
   resolveTargets,
   selectDevices,
   startConfirm,
@@ -326,10 +327,13 @@ export function createApp(deps: AppDeps) {
 
   async function finishDeviceConfirm(id: string, kind: ConfirmKind, nonce: string): Promise<Response> {
     const at = now();
+    // 移行してきた端末の受信確認なら、移行元の旧端末を退役させる (移行の節)
     const confirmed = await store.devices.update((cur) => {
       const r = cur[id];
       const next = r === undefined ? null : finishConfirm(r, kind, nonce, at);
-      return next === null ? { result: null } : { next: { ...cur, [id]: next }, result: next };
+      if (next === null) return { result: null };
+      const devices = { ...cur, [id]: next };
+      return { next: kind === "delivery" ? retireMigratedFrom(devices, next, at) : devices, result: next };
     });
     if (confirmed === null) return html(404, notFoundPageHtml("この確認リンクは使用済みか古い。確認を送り直す。", "確認リンクが見つからない"));
     return html(200, confirmedPageHtml({ kind, deviceId: id, device: confirmed }));

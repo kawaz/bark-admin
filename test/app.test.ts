@@ -280,7 +280,7 @@ describe("devices API", () => {
     expect(nonce).not.toBe("");
     const lines = (await (await fetch(`${base}/bark-admin/api/devices?name=iphone`)).text()).split("\n").filter((l) => l !== "");
     expect(lines.map((l) => JSON.parse(l))).toEqual([
-      { device_id: "A", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, crypto: { confirmed_at: null }, info: {}, delivery: { confirmed_at: null }, migrated_to: null, migrated_at: null },
+      { device_id: "A", registered_at: "t0", archived_at: null, tags: { owner: "kawaz", name: "iphone" }, crypto: { confirmed_at: null }, info: {}, delivery: { confirmed_at: null }, migrated_to: null, migrated_at: null, migrated_from: null },
     ]);
     expect(lines.join("")).not.toContain(KEY_A);
     const detail = await (await fetch(`${base}/bark-admin/api/devices/A`)).text();
@@ -842,6 +842,49 @@ describe("migration to the current public host", () => {
     expect(gone.status).toBe(410);
     expect(await gone.json()).toMatchObject({ message: expect.stringContaining("device page") });
     expect((await store.devices.read())["A"]).toMatchObject({ migrated_to: "NEWKEY", migrated_at: NOW });
+  });
+
+  // 新しい端末の受信確認を送り、通知の URL を開く
+  async function confirmDelivery(id: string) {
+    await fetch(`${base}/bark-admin/api/devices/${id}/confirm/delivery`, { method: "POST" });
+    const nonce = (await store.devices.read())[id]?.delivery?.pending_nonce ?? "";
+    expect((await fetch(`${base}/bark-admin/api/devices/${id}/confirm/delivery/${nonce}`)).status).toBe(200);
+  }
+
+  test("the delivery confirm of the migrated device retires the old one (migrated_to stays); the API shows migrated_from", async () => {
+    await makeStale("A");
+    const { token } = await migrate("A");
+    await fetch(`${base}/r/${token}/register?devicetoken=t-new&key=A2`, { headers: { host: "bark.example" } });
+    expect(await (await fetch(`${base}/bark-admin/api/devices/A2`)).json()).toMatchObject({ migrated_from: "A" });
+    expect((await store.devices.read())["A"]?.archived_at).toBeNull();
+    clock = new Date(START.getTime() + 60_000);
+    await confirmDelivery("A2");
+    const later = localIso(clock);
+    expect((await store.devices.read())["A"]).toMatchObject({ archived_at: later, migrated_to: "A2", migrated_at: NOW });
+    expect((await store.devices.read())["A2"]?.archived_at).toBeNull();
+    // 既定の一覧からは消え、archived=1 で移行済みとして見える
+    expect(await (await fetch(`${base}/bark-admin/api/devices?name=iphone`)).text()).not.toContain('"device_id":"A"');
+    expect(await (await fetch(`${base}/bark-admin/api/devices?name=iphone&archived=1`)).text()).toContain('"migrated_to":"A2"');
+  });
+
+  test("an old device already retired keeps its archived_at", async () => {
+    await makeStale("A");
+    const { token } = await migrate("A");
+    await fetch(`${base}/r/${token}/register?devicetoken=t-new&key=A2`, { headers: { host: "bark.example" } });
+    await fetch(`${base}/bark-admin/api/devices/A`, { method: "DELETE" });
+    clock = new Date(START.getTime() + 60_000);
+    await confirmDelivery("A2");
+    expect((await store.devices.read())["A"]?.archived_at).toBe(NOW);
+  });
+
+  test("the delivery confirm of a device registered without a migration token retires nothing", async () => {
+    const { token } = await openAdd((await createInvite({ name: "plain" })).invite);
+    await fetch(`${base}/r/${token}/register?devicetoken=t&key=P1`);
+    await confirmDelivery("P1");
+    await confirmDelivery("A");
+    const devices = await store.devices.read();
+    expect(Object.entries(devices).filter(([, d]) => d.archived_at !== null).map(([id]) => id)).toEqual(["D"]);
+    expect(devices["P1"]?.migrated_from).toBeUndefined();
   });
 
   test("a device without a key: the new device has no key and the done notice is plain", async () => {

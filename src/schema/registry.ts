@@ -92,6 +92,8 @@ export const DeviceRecordSchema = v.object({
   // 新しい公開名で登録し直した (移行した) 先の device_id と日時。移行トークンでの登録で付く。移行していない行には無い
   migrated_to: v.optional(v.string()),
   migrated_at: v.optional(v.string()),
+  // 移行トークンで登録した端末の移行元 (旧端末の device_id)。この端末の受信確認で旧端末を退役させる
+  migrated_from: v.optional(v.string()),
 });
 export type DeviceRecord = v.InferOutput<typeof DeviceRecordSchema>;
 
@@ -154,13 +156,14 @@ export const LegacyInvitesSchema = v.record(v.string(), v.looseObject({ used_by:
 
 // API で外に出す 1 device の形 (キーだった device_id を中に持つ)。pending_nonce は確認の根拠なので、device_token は使い道が無いので外に出さない
 // info の無い行も {} で出す。delivery は確認状態だけ (無い行は未確認)
-// migrated_to / migrated_at は移行していなければ null
-export type DeviceView = { device_id: string } & Omit<DeviceRecord, "crypto" | "info" | "delivery" | "device_token" | "migrated_to" | "migrated_at"> & {
+// migrated_to / migrated_at / migrated_from は移行に関わっていなければ null
+export type DeviceView = { device_id: string } & Omit<DeviceRecord, "crypto" | "info" | "delivery" | "device_token" | "migrated_to" | "migrated_at" | "migrated_from"> & {
   crypto: { key: string; confirmed_at: string | null } | null;
   info: DeviceInfo;
   delivery: { confirmed_at: string | null };
   migrated_to: string | null;
   migrated_at: string | null;
+  migrated_from: string | null;
 };
 
 // 一覧 (GET /api/devices) の 1 行。鍵は詳細でだけ見せ、一覧には暗号化の有無と確認状態だけ出す。info は一覧の表示に使う 3 項目だけ

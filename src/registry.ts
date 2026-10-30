@@ -17,7 +17,7 @@ export function matchTags(tags: Tags, filter: Tags): boolean {
 }
 
 // device_token (APNs の token) は bark-server の写しで送信にも照合にも使わないので外に出さない (登録簿には残す)
-export function view(id: string, { crypto, info, delivery, registered_at, archived_at, tags, migrated_to, migrated_at }: DeviceRecord): DeviceView {
+export function view(id: string, { crypto, info, delivery, registered_at, archived_at, tags, migrated_to, migrated_at, migrated_from }: DeviceRecord): DeviceView {
   return {
     device_id: id,
     registered_at,
@@ -28,6 +28,7 @@ export function view(id: string, { crypto, info, delivery, registered_at, archiv
     delivery: { confirmed_at: delivery?.confirmed_at ?? null },
     migrated_to: migrated_to ?? null,
     migrated_at: migrated_at ?? null,
+    migrated_from: migrated_from ?? null,
   };
 }
 
@@ -97,12 +98,25 @@ export function upsertRegistration(
   return { devices: { ...devices, [reg.deviceId]: rec }, created: true };
 }
 
-// 移行トークンでの登録: 旧端末 (from) に移行先 (to) を記録する。旧端末が無い (手で消した) か、同じ key で登録し直しただけなら何もしない。
-// 最初の移行の日時を保つ (同じトークンは 1 回しか使えないが、手で直した登録簿でも動かさない)
+// 移行トークンでの登録: 新しい端末 (to) に移行元を、旧端末 (from) に移行先を記録する。同じ key で登録し直しただけなら何もしない。
+// 片方が無い (手で消した) ならその側は書かない。旧端末は最初の移行の日時を保つ (同じトークンは 1 回しか使えないが、手で直した登録簿でも動かさない)
 export function markMigrated(devices: Devices, from: string, to: string, at: string): Devices {
+  if (from === to) return devices;
+  const next: Devices = { ...devices };
+  const cur = devices[to];
+  if (cur !== undefined) next[to] = { ...cur, migrated_from: from };
   const old = devices[from];
-  if (old === undefined || from === to || old.migrated_to !== undefined) return devices;
-  return { ...devices, [from]: { ...old, migrated_to: to, migrated_at: at } };
+  if (old !== undefined && old.migrated_to === undefined) next[from] = { ...old, migrated_to: to, migrated_at: at };
+  return next;
+}
+
+// 移行先の端末の受信確認が取れた: 移行元 (migrated_from) の旧端末を退役させる。鍵を持つ端末の移行は案内を暗号化して送っているので、受信確認で暗号の受信まで確かめられている。
+// 退役済みなら最初の退役日時を保つ (archiveDevice)。移行元を持たない端末・旧端末が無い時は何もしない
+export function retireMigratedFrom(devices: Devices, confirmed: DeviceRecord, at: string): Devices {
+  const from = confirmed.migrated_from;
+  const old = from === undefined ? undefined : devices[from];
+  if (from === undefined || old === undefined) return devices;
+  return { ...devices, [from]: archiveDevice(old, at) };
 }
 
 export function patchDevice(rec: DeviceRecord, patch: PatchDevice): DeviceRecord {

@@ -73,7 +73,8 @@ function renderServerHost(d) {
   const stale = d.migrated_to === null && host !== undefined && host !== currentHost;
   $("#migrate").hidden = !stale;
   if (d.migrated_to !== null) {
-    span.replaceChildren("移行済み → ", el("a", { href: `/bark-admin/devices/${encodeURIComponent(d.migrated_to)}`, textContent: d.migrated_to }), "。この端末は退役してよい");
+    const after = d.archived_at === null ? "。移行先の受信確認が済むと自動で退役する" : "。移行確認後に退役した";
+    span.replaceChildren("移行済み → ", el("a", { href: `/bark-admin/devices/${encodeURIComponent(d.migrated_to)}`, textContent: d.migrated_to }), after);
   } else if (host === undefined) span.textContent = "不明";
   else if (!stale) span.textContent = host;
   else span.replaceChildren(host, " ", el("span", { className: "hint", textContent: `古い (現在の公開名: ${currentHost})` }));
@@ -90,6 +91,10 @@ function render(d) {
   $("#device-id-fact").textContent = d.device_id;
   setTime($("#registered-at"), d.registered_at);
   renderServerHost(d);
+  // 移行トークンで登録した端末なら移行元 (旧端末) へのリンク
+  $("#migrated-from-label").hidden = d.migrated_from === null;
+  $("#migrated-from").hidden = d.migrated_from === null;
+  $("#migrated-from").replaceChildren(...(d.migrated_from === null ? [] : [el("a", { href: `/bark-admin/devices/${encodeURIComponent(d.migrated_from)}`, textContent: d.migrated_from })]));
   $("#tags").value = formatTagLines(d.tags);
   const tags = Object.entries(d.tags);
   $("#tag-chips").replaceChildren(...(tags.length === 0 ? [el("li", { className: "hint", textContent: "タグなし" })] : tags.map(([k, v]) => el("li", { className: "tag", textContent: `${k}=${v}` }))));
