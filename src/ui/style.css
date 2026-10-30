@@ -101,11 +101,9 @@ svg.i { width: 22px; height: 22px; flex: none; }
   padding: 20px var(--gutter) 14px;
 }
 
-.appbar-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .appbar-title { min-width: 0; }
 .appbar h1 { font-size: 34px; line-height: 1.1; font-weight: 800; letter-spacing: -0.02em; }
 .appbar .sub { margin-top: 4px; color: var(--ink-2); font-size: 13px; overflow-wrap: anywhere; }
-.appbar-acts { display: flex; gap: 8px; flex: none; }
 
 .back {
   display: inline-flex;
@@ -151,19 +149,6 @@ svg.i { width: 22px; height: 22px; flex: none; }
 .btn.icon-only { width: 44px; min-height: 44px; padding: 0; color: var(--ink-2); }
 
 .acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-
-/* TOP の見出しのボタン: 狭い幅では「追加」を丸い + だけにし、「通知を送る」は下部のバーに任せる */
-.btn-add { width: 52px; height: 52px; padding: 0; background: var(--signal); color: var(--signal-ink); }
-.btn-add .label { display: none; }
-.btn-add svg { width: 26px; height: 26px; }
-.btn-send-head { display: none; }
-
-@media (min-width: 960px) {
-  .btn-add { width: auto; height: auto; padding: 0 20px; background: var(--surface); box-shadow: var(--shadow); color: var(--ink); }
-  .btn-add .label { display: inline; }
-  .btn-add svg { width: 22px; height: 22px; }
-  .btn-send-head { display: inline-flex; }
-}
 
 /* ---------- 節・パネル ---------- */
 
@@ -364,14 +349,18 @@ button.chip[aria-pressed="true"] .k { color: var(--signal-ink); }
   gap: 28px;
 }
 
-.has-thumbbar .top { padding-bottom: calc(110px + env(safe-area-inset-bottom)); }
-
+/* TOP はどの幅でも 1 列 (宛先 → 操作 → 一覧)。広い幅では一覧の行が横に伸びすぎない幅で止める */
 @media (min-width: 960px) {
-  .appbar, .top { max-width: var(--wide); }
-  .top { grid-template-columns: 380px minmax(0, 1fr); align-items: start; }
-  .has-thumbbar .top { padding-bottom: 48px; }
-  .filter-section { position: sticky; top: 16px; }
+  .page-top .appbar, .top { max-width: 880px; }
 }
+
+/* 宛先のパネルの下端: 一致した台数と、通知を送る (主)・デバイスを追加 (副)。390 幅でも 2 つのボタンが 1 行に収まる */
+.target-bar { display: grid; gap: 12px; padding: 14px 18px 18px; border-top: 1px solid var(--line); background: var(--surface); }
+.target-acts { display: flex; gap: 8px; }
+.target-acts .btn { flex: 1 1 auto; padding: 0 14px; font-size: 15px; white-space: nowrap; }
+.target-acts .btn-primary { flex-grow: 1.4; }
+.target-acts .btn:not(.btn-primary) { background: var(--surface-2); }
+.target-acts .btn svg { width: 20px; height: 20px; }
 
 .match { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .match .count { font-size: 28px; line-height: 1; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
@@ -423,29 +412,6 @@ button.chip[aria-pressed="true"] .k { color: var(--signal-ink); }
       "glyph meta  state chev";
   }
   .device > .statuses { flex-direction: column; align-items: flex-start; gap: 6px; padding-top: 4px; }
-}
-
-/* 下部の親指のバー (狭い幅だけ) */
-.thumbbar {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 10;
-  padding: 10px var(--gutter) calc(10px + env(safe-area-inset-bottom));
-  background: color-mix(in srgb, var(--bg) 82%, transparent);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-top: 1px solid var(--line);
-}
-
-.thumbbar .inner { max-width: calc(var(--narrow) - 2 * var(--gutter)); margin: 0 auto; display: flex; align-items: center; gap: 12px; }
-.thumbbar .who { flex: 1; min-width: 0; font-size: 14px; color: var(--ink-2); line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.thumbbar .who b { display: block; color: var(--ink); font-size: 16px; }
-.thumbbar .btn { min-height: 54px; padding: 0 24px; font-size: 17px; flex: none; }
-
-@media (min-width: 960px) {
-  .thumbbar { display: none; }
 }
 
 /* ---------- ダイアログ (狭い幅は下から出るシート、広い幅は中央) ---------- */
@@ -637,7 +603,7 @@ details.more[open] > summary svg { transform: rotate(-90deg); }
 .detail-cols { display: grid; gap: 28px; }
 
 @media (min-width: 960px) {
-  .detail { max-width: var(--wide); }
+  .appbar, .detail { max-width: var(--wide); }
   .detail-cols { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
 }
 

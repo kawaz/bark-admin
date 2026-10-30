@@ -169,16 +169,13 @@ ${actions(button("URL をコピー", { attrs: { id: "invite-copy" } }), button("
   });
 }
 
+// 操作は宛先のパネルの下端に集める (一致した台数の行と、通知を送る・デバイスを追加)。どの幅でも 宛先 → 操作 → 一覧 の 1 列
 export function indexPageHtml(currentHost: string): string {
   return page({
     title: "端末 - bark-admin",
     script: "index.js",
-    bodyClass: "has-thumbbar",
-    body: html`${appBar({
-      title: "端末",
-      sub: currentHost,
-      actions: html`${opener(html`<span class="label">デバイスを追加</span>`, "add-dialog", { icon: "plus", className: "btn-add", attrs: { "aria-label": "デバイスを追加" } })}${opener("通知を送る", "send-dialog", { variant: "primary", icon: "send", className: "btn-send-head" })}`,
-    })}
+    bodyClass: "page-top",
+    body: html`${appBar({ title: "端末", sub: currentHost })}
 <main class="top">
 ${section(
   "filter",
@@ -186,17 +183,18 @@ ${section(
   panel(
     html`<div class="panel-body">
 ${field({ id: "filter", label: html`<span class="sr-only">宛先の条件</span>`, control: textarea("filter", "", { kv: true, rows: 2, attrs: { placeholder: "owner=kawaz", "aria-describedby": "filter-hint filter-error" } }) })}
-<p class="match" aria-live="polite"><span id="match-count" class="count"></span><span id="match-text" class="hint"></span></p>
 ${hint(html`1 行に 1 つ ${code("key=value")}。全部に一致する端末へ送る。${code("key=*値*")} で値を含むもの、${code("key=*")} でそのタグがあるもの。空なら全台。一覧のタグを押しても足せる`, { id: "filter-hint" })}
 <p id="filter-error" class="error" role="alert" hidden></p>
 ${switchRow({ id: "show-archived", label: "退役済みも表示" })}
+</div>
+<div class="target-bar">
+<p class="match" aria-live="polite"><span id="match-count" class="count"></span><span id="match-text" class="hint"></span></p>
+<div class="target-acts">${opener("通知を送る", "send-dialog", { variant: "primary", icon: "send", attrs: { id: "open-send" } })}${opener("デバイスを追加", "add-dialog", { icon: "plus" })}</div>
 </div>`,
   ),
-  { attrs: { class: "filter-section" } },
 )}
-${section("devices", "端末", html`${panel(html`<ul id="devices" class="devices"></ul>`)}${emptyState("", { id: "devices-empty", hidden: true })}`, { aside: html`<span id="devices-count"></span>`, attrs: { class: "devices-section" } })}
+${section("devices", "端末", html`${panel(html`<ul id="devices" class="devices"></ul>`)}${emptyState("", { id: "devices-empty", hidden: true })}`, { aside: html`<span id="devices-count"></span>` })}
 </main>
-<div class="thumbbar"><div class="inner"><p class="who"><b id="bar-count"></b><span id="bar-names"></span></p>${opener("通知を送る", "send-dialog", { variant: "primary", attrs: { id: "bar-send" } })}</div></div>
 ${sendDialog()}
 ${addDialog()}`,
   });

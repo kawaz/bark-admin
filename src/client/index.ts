@@ -63,18 +63,17 @@ function names(devices: DeviceListItem[]): string {
   return devices.map((d) => d.tags["name"] ?? d.device_id).join("、");
 }
 
-// 宛先の写し (一致数・下部のバー・送信ダイアログの宛先と送信ボタン)。宛先に一致する active な台数が送信先の数
+// 宛先の写し (一致数・通知を送るボタン・送信ダイアログの宛先と送信ボタン)。宛先に一致する active な台数が送信先の数
 function renderTarget(): void {
   const count = byId("match-count", HTMLElement);
   const text = byId("match-text", HTMLElement);
-  const barCount = byId("bar-count", HTMLElement);
-  const barNames = byId("bar-names", HTMLElement);
+  const open = byId("open-send", HTMLButtonElement);
   const echo = byId("target-echo", HTMLElement);
   if (!state.filterOk) {
     count.textContent = "";
     text.textContent = "宛先の書き方を直すと送れる";
-    barCount.textContent = "宛先の書き方を直す";
-    barNames.textContent = "";
+    open.disabled = true;
+    setOpenLabel(open, "通知を送る");
     setHtml(echo, html`<p class="error">宛先の書き方を直すと送れる</p>`);
     sendButton.disabled = true;
     sendButton.textContent = "送る";
@@ -85,9 +84,9 @@ function renderTarget(): void {
   const entries = Object.entries(state.filter);
   const retired = state.devices.length - n;
   setHtml(count, html`${n}<small>台</small>`);
-  text.textContent = `${entries.length === 0 ? "が宛先 (条件なしで全台)" : "が一致"}${retired > 0 ? `。表示中の退役済み ${retired} 台には送らない` : ""}`;
-  barCount.textContent = n === 0 ? "宛先に一致する端末がない" : `${n} 台が宛先`;
-  barNames.textContent = names(targets);
+  text.textContent = `${n === 0 ? "宛先に一致する端末がない" : entries.length === 0 ? "が宛先 (条件なしで全台)" : "が宛先"}${retired > 0 ? `。表示中の退役済み ${retired} 台には送らない` : ""}`;
+  open.disabled = n === 0;
+  setOpenLabel(open, n === 0 ? "通知を送る" : `${n} 台へ通知を送る`);
   setHtml(
     echo,
     html`<div class="echo-head"><span class="label">宛先</span><span class="count">${n} 台</span></div>${entries.length === 0 ? html`<p class="hint">条件なし (全台)</p>` : chips(entries.map(([k, v]) => chip(k, v)))}${n === 0 ? "" : html`<p class="hint">${names(targets)}</p>`}`,
@@ -96,6 +95,13 @@ function renderTarget(): void {
     sendButton.disabled = n === 0;
     sendButton.textContent = n === 0 ? "宛先に一致する端末がない" : `${n} 台へ送る`;
   }
+}
+
+// ボタンの絵 (svg) は残して文言だけ差し替える
+function setOpenLabel(button: HTMLButtonElement, label: string): void {
+  const last = button.lastChild;
+  if (last !== null && last.nodeType === Node.TEXT_NODE) last.textContent = label;
+  else button.append(label);
 }
 
 async function loadDevices(): Promise<void> {

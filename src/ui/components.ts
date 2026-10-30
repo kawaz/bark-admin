@@ -193,8 +193,8 @@ export function keyBox(id: string, actionsHtml: Part = ""): Html {
 
 // ---------- 画面の枠 ----------
 
-export function appBar(o: { title: Part; sub?: Part; actions?: Part }): Html {
-  return html`<header class="appbar"><div class="appbar-row"><div class="appbar-title"><h1>${o.title}</h1>${o.sub === undefined ? "" : html`<p class="sub">${o.sub}</p>`}</div>${o.actions === undefined ? "" : html`<div class="appbar-acts">${o.actions}</div>`}</div></header>`;
+export function appBar(o: { title: Part; sub?: Part }): Html {
+  return html`<header class="appbar"><div class="appbar-title"><h1>${o.title}</h1>${o.sub === undefined ? "" : html`<p class="sub">${o.sub}</p>`}</div></header>`;
 }
 
 // 一覧へ戻るリンクだけの見出し (詳細ページ。画面の名前は本文の見出しが持つ)
