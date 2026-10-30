@@ -135,7 +135,7 @@ export function rows(items: readonly Row[], className = ""): Html {
   )}</dl>`;
 }
 
-export type AlertTone = "warn" | "info" | "muted";
+export type AlertTone = "warn" | "moved" | "archived";
 
 export function alert(tone: AlertTone, body: Part, acts: Part = "", a: Attrs = {}): Html {
   return html`<div${attrs({ class: `alert alert-${tone}`, role: "status", ...a })}><p>${body}</p>${acts}</div>`;

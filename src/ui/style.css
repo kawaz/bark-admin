@@ -19,6 +19,8 @@
   --info: #4c4fd0;
   --warn: #b25500;
   --danger: #c0352b;
+  --moved: #0a72b5;
+  --archived: #8a5a2b;
   --focus: #2b4bd6;
   --banner: rgba(255, 255, 255, 0.8);
   --backdrop: rgba(17, 22, 46, 0.42);
@@ -50,6 +52,8 @@
     --info: #a5a6ff;
     --warn: #ffa64f;
     --danger: #ff6d60;
+    --moved: #5cb8f2;
+    --archived: #d6a46f;
     --focus: #ffc21a;
     --banner: rgba(46, 54, 97, 0.84);
     --backdrop: rgba(4, 6, 18, 0.6);
@@ -298,11 +302,14 @@ button.chip[aria-pressed="true"] .k { color: var(--signal-ink); }
 
 .st { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 650; white-space: nowrap; }
 .st::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; }
+/* 塗りの点は「その状態にある」(確認済み・古い・移行済み・アーカイブ済み)、中抜きの点は「まだ・無い」(未確認・無効・未登録) */
 .st-ok { color: var(--ok); }
-.st-info { color: var(--info); }
 .st-warn { color: var(--warn); }
+.st-moved { color: var(--moved); }
+.st-archived { color: var(--archived); }
+.st-info { color: var(--info); }
 .st-muted { color: var(--ink-3); }
-.st-muted::before { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
+.st-info::before, .st-muted::before { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
 .statuses { display: flex; flex-wrap: wrap; gap: 4px 14px; }
 
 /* ---------- 端末の絵 ---------- */
@@ -349,6 +356,9 @@ button.chip[aria-pressed="true"] .k { color: var(--signal-ink); }
   gap: 28px;
 }
 
+/* 節の中身が幅を押し広げない (はみ出しは節の中で折り返す) */
+.top > * { min-width: 0; }
+
 /* TOP はどの幅でも 1 列 (宛先 → 操作 → 一覧)。広い幅では一覧の行が横に伸びすぎない幅で止める */
 @media (min-width: 960px) {
   .page-top .appbar, .top { max-width: 880px; }
@@ -361,6 +371,10 @@ button.chip[aria-pressed="true"] .k { color: var(--signal-ink); }
 .target-acts .btn-primary { flex-grow: 1.4; }
 .target-acts .btn:not(.btn-primary) { background: var(--surface-2); }
 .target-acts .btn svg { width: 20px; height: 20px; }
+/* 狭い幅では絵を外して 2 つの文言を 1 行に収める (375 幅で「12 台へ通知を送る」まで) */
+@media (max-width: 419px) {
+  .target-acts .btn svg { display: none; }
+}
 
 .match { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .match .count { font-size: 28px; line-height: 1; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
@@ -401,7 +415,7 @@ button.chip[aria-pressed="true"] .k { color: var(--signal-ink); }
 .device .meta .id { color: var(--ink); font-size: 13px; }
 .device > .statuses { grid-area: state; }
 .device > .chev { grid-area: chev; align-self: center; color: var(--ink-3); width: 20px; height: 20px; }
-.device.retired > :not(.chips) { opacity: 0.62; }
+.device.archived > :not(.chips, .statuses) { opacity: 0.62; }
 
 @container (min-width: 640px) {
   .device {
@@ -610,6 +624,10 @@ details.more[open] > summary svg { transform: rotate(-90deg); }
 .alert { display: grid; gap: 12px; padding: 16px 18px; border-radius: var(--r-section); background: var(--surface); box-shadow: inset 0 0 0 1.5px var(--line); }
 .alert-warn { background: color-mix(in srgb, var(--warn) 14%, var(--surface)); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--warn) 45%, transparent); }
 .alert-warn b { color: var(--warn); }
+.alert-moved { background: color-mix(in srgb, var(--moved) 10%, var(--surface)); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--moved) 40%, transparent); }
+.alert-moved b { color: var(--moved); }
+.alert-archived { background: color-mix(in srgb, var(--archived) 10%, var(--surface)); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--archived) 40%, transparent); }
+.alert-archived b { color: var(--archived); }
 
 /* 定義リストの行 (値の右に小さな操作ボタン) */
 .rows { margin: 0; }
@@ -649,7 +667,7 @@ details.danger-zone summary { cursor: pointer; color: var(--signal-text); font-w
 details.danger-zone summary::-webkit-details-marker { display: none; }
 details.danger-zone summary::before { content: ""; width: 7px; height: 7px; margin: 0 10px 0 4px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg); transition: transform 0.2s; }
 details.danger-zone[open] summary::before { transform: rotate(45deg); }
-.retire { display: grid; gap: 12px; justify-items: start; padding: 4px; }
+.archive-zone { display: grid; gap: 12px; justify-items: start; padding: 4px; }
 
 /* ---------- 招待ページ ---------- */
 

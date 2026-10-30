@@ -1,6 +1,7 @@
 // 端末の状態の読み方 (純粋関数)。一覧の状態ラベル、詳細の状態の行、確認できたページが同じ言い回しになるよう 1 か所に置く
 
-export type Tone = "ok" | "info" | "warn" | "muted";
+// ok / warn / moved / archived は「その状態にある」(塗りの点)、info は「まだ」(中抜きの点)
+export type Tone = "ok" | "info" | "warn" | "moved" | "archived";
 export type Status = { tone: Tone; text: string };
 
 type Confirmed = { confirmed_at: string | null };
@@ -34,19 +35,24 @@ export function hostState(d: Pick<StatusSource, "migrated_to" | "info">, current
   return host === currentHost ? { kind: "current", host } : { kind: "stale", host };
 }
 
-// 一覧と詳細の見出しに並べる状態ラベル。並びは 受信確認 → 暗号化 → サーバー名 → 退役。
-// 何も言うことが無い項目 (暗号化なし、今のサーバー名、サーバー名が不明) はラベルにしない
-export function deviceStatuses(d: StatusSource, currentHost: string): Status[] {
+// device_id → 端末の名前 (name タグ)。分からなければ undefined (device_id をそのまま出す)
+export type NameOf = (id: string) => string | undefined;
+
+const noNames: NameOf = () => undefined;
+
+// 一覧と詳細の見出しに並べる状態ラベル。並びは 受信確認 → 暗号化 → サーバー名 (移行) → アーカイブ。
+// 何も言うことが無い項目 (暗号化なし、今のサーバー名、サーバー名が不明) はラベルにしない。移行済みは行き先の端末名を添える
+export function deviceStatuses(d: StatusSource, currentHost: string, nameOf: NameOf = noNames): Status[] {
   const out: Status[] = [];
-  const retired = d.archived_at !== null;
-  if (!retired && d.delivery.confirmed_at === null) out.push({ tone: "info", text: "受信未確認" });
+  const archived = d.archived_at !== null;
+  if (!archived && d.delivery.confirmed_at === null) out.push({ tone: "info", text: "受信未確認" });
   const level = cryptoLevel(d.crypto);
   if (level === "confirmed") out.push({ tone: "ok", text: "暗号化 確認済み" });
   if (level === "unconfirmed") out.push({ tone: "info", text: "暗号化 未確認" });
   const host = hostState(d, currentHost);
-  if (host.kind === "migrated") out.push({ tone: "muted", text: "移行済み" });
-  if (host.kind === "stale" && !retired) out.push({ tone: "warn", text: "サーバー名が古い" });
-  if (retired) out.push({ tone: "muted", text: "退役済み" });
+  if (host.kind === "migrated") out.push({ tone: "moved", text: `移行済み → ${nameOf(host.to) ?? host.to}` });
+  if (host.kind === "stale" && !archived) out.push({ tone: "warn", text: "サーバー名が古い" });
+  if (archived) out.push({ tone: "archived", text: "アーカイブ済み" });
   return out;
 }
 

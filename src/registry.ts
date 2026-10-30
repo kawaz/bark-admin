@@ -52,7 +52,7 @@ export function freshCrypto(c: CryptoKeyOnly): DeviceCrypto {
   return { key: c.key, confirmed_at: null, pending_nonce: null };
 }
 
-// push の宛先。skipped はタグには当たったが退役済みで外した台数。
+// push の宛先。skipped はタグには当たったがアーカイブ済みで外した台数。
 export function resolveTargets(devices: Devices, filter: Tags): { deviceIds: string[]; skipped: number } {
   const matched = Object.entries(devices).filter(([, rec]) => matchTags(rec.tags, filter));
   return {
@@ -110,8 +110,8 @@ export function markMigrated(devices: Devices, from: string, to: string, at: str
   return next;
 }
 
-// 移行先の端末の受信確認が取れた: 移行元 (migrated_from) の旧端末を退役させる。鍵を持つ端末の移行は案内を暗号化して送っているので、受信確認で暗号の受信まで確かめられている。
-// 退役済みなら最初の退役日時を保つ (archiveDevice)。移行元を持たない端末・旧端末が無い時は何もしない
+// 移行先の端末の受信確認が取れた: 移行元 (migrated_from) の旧端末をアーカイブする。鍵を持つ端末の移行は案内を暗号化して送っているので、受信確認で暗号の受信まで確かめられている。
+// アーカイブ済みなら最初のアーカイブ日時を保つ (archiveDevice)。移行元を持たない端末・旧端末が無い時は何もしない
 export function retireMigratedFrom(devices: Devices, confirmed: DeviceRecord, at: string): Devices {
   const from = confirmed.migrated_from;
   const old = from === undefined ? undefined : devices[from];
@@ -128,7 +128,7 @@ export function patchDevice(rec: DeviceRecord, patch: PatchDevice): DeviceRecord
   };
 }
 
-// 退役済みなら最初の退役日時を保つ (DELETE を繰り返しても日時が動かない)
+// アーカイブ済みなら最初のアーカイブ日時を保つ (DELETE を繰り返しても日時が動かない)
 export function archiveDevice(rec: DeviceRecord, now: string): DeviceRecord {
   return rec.archived_at === null ? { ...rec, archived_at: now } : rec;
 }

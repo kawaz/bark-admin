@@ -44,18 +44,23 @@ describe("device status labels", () => {
     ["key not confirmed", source({ crypto: { confirmed_at: null } }), ["暗号化 未確認"]],
     ["old host", source({ info: { server_host: "bark.old.example" } }), ["サーバー名が古い"]],
     ["unknown host is not a label", source({ info: {} }), []],
-    ["migrated replaces the old host label", source({ migrated_to: "NEW", info: { server_host: "bark.old.example" } }), ["移行済み"]],
-    ["retired: no delivery or old host label, only retired", source({ archived_at: "t9", delivery: { confirmed_at: null }, info: { server_host: "bark.old.example" } }), ["退役済み"]],
-    ["migrated and retired", source({ archived_at: "t9", migrated_to: "NEW" }), ["移行済み", "退役済み"]],
+    ["migrated replaces the old host label and names where it went (device_id when the name is unknown)", source({ migrated_to: "NEW", info: { server_host: "bark.old.example" } }), ["移行済み → NEW"]],
+    ["archived: no delivery or old host label, only archived", source({ archived_at: "t9", delivery: { confirmed_at: null }, info: { server_host: "bark.old.example" } }), ["アーカイブ済み"]],
+    ["migrated and archived", source({ archived_at: "t9", migrated_to: "NEW" }), ["移行済み → NEW", "アーカイブ済み"]],
   ] as const)("%s", (_, d, expected) => {
     expect(deviceStatuses(d, HOST).map((s) => s.text)).toEqual([...expected]);
   });
 
-  test("tones: confirmed is ok, unconfirmed is info, old host is warn, retired / migrated are muted", () => {
+  test("the migrated label carries the new device's name when known", () => {
+    expect(deviceStatuses(source({ migrated_to: "NEW" }), HOST, (id) => (id === "NEW" ? "iphone" : undefined)).map((s) => s.text)).toEqual(["移行済み → iphone"]);
+  });
+
+  // 塗りの点 (その状態にある) と中抜きの点 (まだ) の区別は tone で決まる (style.css)
+  test("tones: confirmed is ok, unconfirmed is info, old host is warn, migrated is moved, archived is archived", () => {
     const tones = (d: StatusSource) => deviceStatuses(d, HOST).map((s) => s.tone);
     expect(tones(source({ delivery: { confirmed_at: null }, crypto: { confirmed_at: null } }))).toEqual(["info", "info"]);
     expect(tones(source({ crypto: { confirmed_at: "t" }, info: { server_host: "old" } }))).toEqual(["ok", "warn"]);
-    expect(tones(source({ archived_at: "t", migrated_to: "N" }))).toEqual(["muted", "muted"]);
+    expect(tones(source({ archived_at: "t", migrated_to: "N" }))).toEqual(["moved", "archived"]);
   });
 
   test("hostState", () => {
@@ -90,12 +95,13 @@ describe("device row (list)", () => {
     expect(row).toContain('aria-pressed="true" title="宛先から owner=kawaz を外す"');
   });
 
-  test("only active devices carry the send-target mark; unnamed devices say so", () => {
+  test("only active (not archived) devices carry the send-target mark; unnamed devices say so", () => {
     expect(deviceRow(detail(), HOST, noMatch).value).toContain('class="target"');
-    const retired = deviceRow({ ...detail(), archived_at: "t9", tags: {} }, HOST, noMatch).value;
-    expect(retired).not.toContain('class="target"');
-    expect(retired).toContain('<li class="device retired">');
-    expect(retired).toContain('<a class="name unnamed"');
+    const archived = deviceRow({ ...detail(), archived_at: "t9", tags: {} }, HOST, noMatch).value;
+    expect(archived).not.toContain('class="target"');
+    expect(archived).toContain('<li class="device archived">');
+    expect(archived).toContain('<a class="name unnamed"');
+    expect(archived).toContain('<span class="st st-archived">アーカイブ済み</span>');
   });
 });
 
@@ -107,7 +113,7 @@ describe("device detail", () => {
     expect(frame).toContain('<code id="crypto-key" class="key masked" aria-label="暗号化キー (隠している)">••••••••</code>');
   });
 
-  test("each state row opens its own dialog; retired devices get no operations", () => {
+  test("each state row opens its own dialog; archived devices get no operations", () => {
     const rows = deviceStateRows(detail({ info: { server_host: "bark.old.example" } }), HOST).value;
     expect(rows).toContain('commandfor="delivery-dialog"');
     expect(rows).toContain('commandfor="crypto-dialog" command="show-modal">鍵と確認</button>');
@@ -118,12 +124,13 @@ describe("device detail", () => {
     expect(deviceStateRows(detail({ archived_at: "t9" }), HOST).value).not.toContain("commandfor");
   });
 
-  test("alerts: old host offers re-registration, migrated links to the new device, retired offers restore", () => {
+  test("alerts: old host offers re-registration, migrated links to the new device by name, archived offers unarchiving", () => {
     expect(deviceAlerts(detail({ info: { server_host: "bark.old.example" } }), HOST).value).toContain("新しいサーバー名で登録し直す</button>");
-    const moved = deviceAlerts(detail({ migrated_to: "NEW", archived_at: "t9" }), HOST).value;
-    expect(moved).toContain('href="/bark-admin/devices/NEW">移行先の端末を開く</a>');
-    expect(moved).not.toContain("復帰させる");
-    expect(deviceAlerts(detail({ archived_at: "2026-10-21T00:00:00+09:00" }), HOST).value).toContain("復帰させる</button>");
+    const moved = deviceAlerts(detail({ migrated_to: "NEW", archived_at: "t9" }), HOST, () => "iphone").value;
+    expect(moved).toContain('href="/bark-admin/devices/NEW">移行先の iphone を開く</a>');
+    expect(moved).toContain("移行先の受信確認でアーカイブした");
+    expect(moved).not.toContain("アーカイブから戻す");
+    expect(deviceAlerts(detail({ archived_at: "2026-10-21T00:00:00+09:00" }), HOST).value).toContain('commandfor="archive-dialog" command="show-modal">アーカイブから戻す</button>');
     expect(deviceAlerts(detail(), HOST).value).toBe("");
   });
 });

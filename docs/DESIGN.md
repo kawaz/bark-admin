@@ -4,8 +4,8 @@ iPhone / iPad の [Bark](https://github.com/Finb/Bark) アプリへ通知を送�
 
 ## 目的と責務
 
-- 目的: 自作ツールやスクリプトが「誰のどの端末に送るか」をタグで指定して通知を送れるようにする。端末の追加・命名・退役を Web UI で行える
-- 責務: 登録簿 (タグ、登録日時、退役、端末ごとの暗号化キー、登録の要求から観察した端末情報) / 招待 (再利用できるテンプレ) と使い切りの登録トークンによる登録 / 公開名が変わった端末の新しい公開名での登録し直し (移行) / タグによる宛先解決とファンアウト / 鍵を持つ端末への通知内容の暗号化 / 管理 UI
+- 目的: 自作ツールやスクリプトが「誰のどの端末に送るか」をタグで指定して通知を送れるようにする。端末の追加・命名・アーカイブを Web UI で行える
+- 責務: 登録簿 (タグ、登録日時、アーカイブ、端末ごとの暗号化キー、登録の要求から観察した端末情報) / 招待 (再利用できるテンプレ) と使い切りの登録トークンによる登録 / 公開名が変わった端末の新しい公開名での登録し直し (移行) / タグによる宛先解決とファンアウト / 鍵を持つ端末への通知内容の暗号化 / 管理 UI
 - 責務外: APNs への配送 (bark-server)、Bark アプリへの鍵の設定 (端末の持ち主が招待ページか詳細画面からコピーして手で貼る)、認証 (到達制限は caddy-app-proxy の tailnet_only が担う。device_id は秘密扱いしない)
 
 ## 配置
@@ -31,7 +31,7 @@ Web UI (人) ──────┘
   "DuMUEQLh3pDAagNNFVRraf": {
     "device_token": "0cc6…97bc",            // bark-server の応答の写し。送信には使わない (bark-server が自前の bbolt で引く)。API にも画面にも出さない
     "registered_at": "2026-10-20T10:02:28+09:00",
-    "archived_at": null,                     // 退役は削除せずこれを立てて一覧・送信対象から外す
+    "archived_at": null,                     // アーカイブ: 削除せずこれを立てて一覧・送信対象から外す
     "tags": { "owner": "kawaz", "name": "iphone", "family": "kawazu" },  // 平坦な string map、キーは任意
     "crypto": { "key": "<32 文字の [A-Za-z0-9]>", "confirmed_at": null, "pending_nonce": null },  // null なら暗号化しない (キー自体を省いた行も null として読む)
     "delivery": { "confirmed_at": null, "pending_nonce": null },  // 受信の確認 (確認の節)。一度も送っていない行には無く、未確認として読む
@@ -132,7 +132,7 @@ Bark アプリはサーバ追加時の address に登録し続けるので、公
 3. アプリが `/r/<token>/register` を叩くと、招待のトークンと同じく新しい device を作り、トークンのタグと鍵 (確認状態ごと) を写す (タグの優先は トークン > 既存 > 自動)。加えて旧端末に `migrated_to` (新しい device_id) と `migrated_at` を記録し、新しい端末へ完了の案内を送る: title「bark-admin 移行完了」、body「この端末は <今の公開名> で登録された。Bark のサーバーリストから <旧端末の server_host> を削除してよい」+ 改行 + `device: <新 id>` (鍵があれば暗号化)。送れなくても登録は済んでいるので、Bark アプリへの応答は変えずにログに残す
    - 新しい端末には `migrated_from` (旧 device_id) を記録する。旧端末の受信確認・暗号化の確認・`info` は触らない
    - 新しい端末の受信確認は案内ページの 2 段目で取り直す
-4. 新しい端末の受信確認 (`GET …/confirm/delivery/<nonce>` で `delivery.confirmed_at` が付いた時) で、その端末の `migrated_from` の旧端末を自動で退役させる (`archived_at` を立てる。退役済みなら日時を保つ。`migrated_to` はそのまま)。鍵を持つ端末の移行は案内を暗号化して送っているので、ここまで来れば暗号の受信まで確かめられている。旧端末は一覧の既定から消え、`archived=1` で「移行済み」として見える
+4. 新しい端末の受信確認 (`GET …/confirm/delivery/<nonce>` で `delivery.confirmed_at` が付いた時) で、その端末の `migrated_from` の旧端末を自動でアーカイブする (`archived_at` を立てる。アーカイブ済みなら日時を保つ。`migrated_to` はそのまま)。鍵を持つ端末の移行は案内を暗号化して送っているので、ここまで来れば暗号の受信まで確かめられている。旧端末は一覧の既定から消え、`archived=1` で「移行済み」として見える
    - 移行トークンはタグと鍵を自分で持ち招待に依らないので、招待の削除や旧端末の有無で使えなくならない (`state` が `invite-deleted` にならない)。使用済み・期限切れの扱いは招待のトークンと同じ (登録の流れの 3)。招待の登録数には数えない
 
 ## HTTP API
@@ -153,7 +153,7 @@ bark-admin が中身を見るのは `/register` と `/r/:token/register` の 1 �
 
 | method path | 内容 |
 |---|---|
-| `POST /bark-admin/push` | bark-admin 独自の送信 API。body = bark V2 パラメータ (`device_key` / `device_keys` / `ciphertext` / `iv` を除く) + `device: {k: v, …}` (全キーの AND。値は `v` で完全一致、両端が `*` の `*v*` で v を含む、`*` (と `**`) でそのキーがあれば当たる。`v*` / `*v` の `*` は文字そのもので完全一致。否定・エスケープは無い。省略時は active 全台)。該当 device を解決し、鍵を持つ device は 1 台ずつ暗号化して (暗号化の節)、残りは bark-server `/push` に `device_keys` で一括送信、`{sent: [{device_id, status, message?, encrypted}], skipped: n}` を返す (`sent` は宛先の並び順、`status` / `message` は bark-server の device ごとの結果、`encrypted` は暗号化して送ったか、`skipped` はタグに当たったが退役済みで外した台数)。該当 0 台なら bark-server を呼ばず 404。body は Content-Type に関わらず JSON として読み、スキーマに無いキー (`device_key` / `device_keys` / `ciphertext` / `iv` を含む) は 400 |
+| `POST /bark-admin/push` | bark-admin 独自の送信 API。body = bark V2 パラメータ (`device_key` / `device_keys` / `ciphertext` / `iv` を除く) + `device: {k: v, …}` (全キーの AND。値は `v` で完全一致、両端が `*` の `*v*` で v を含む、`*` (と `**`) でそのキーがあれば当たる。`v*` / `*v` の `*` は文字そのもので完全一致。否定・エスケープは無い。省略時は active 全台)。該当 device を解決し、鍵を持つ device は 1 台ずつ暗号化して (暗号化の節)、残りは bark-server `/push` に `device_keys` で一括送信、`{sent: [{device_id, status, message?, encrypted}], skipped: n}` を返す (`sent` は宛先の並び順、`status` / `message` は bark-server の device ごとの結果、`encrypted` は暗号化して送ったか、`skipped` はタグに当たったがアーカイブ済みで外した台数)。該当 0 台なら bark-server を呼ばず 404。body は Content-Type に関わらず JSON として読み、スキーマに無いキー (`device_key` / `device_keys` / `ciphertext` / `iv` を含む) は 400 |
 | `GET /bark-admin/api/devices?k=v&…&archived=1` | `k=v` は `/bark-admin/push` の `device` と同じ解釈 (完全一致 / `*v*` / `*`)。jsonl (1 行 1 device、`device_token` は含まない、`device_id` 付き、`crypto` は `{confirmed_at}` か null で鍵を含まない、`delivery` は `{confirmed_at}`、`info` は `{ts_hostname, os_version, server_host}` だけ、`migrated_to` / `migrated_at` / `migrated_from` は移行に関わっていなければ null)。既定は active のみ |
 | `GET /bark-admin/api/devices/:id` | 1 件 JSON (`device_token` は含まない、`crypto` は `{key, confirmed_at}` か null、`delivery` は `{confirmed_at}`、`info` は全項目で、無い device は `{}`、`migrated_to` / `migrated_at` は一覧と同じ) |
 | `PATCH /bark-admin/api/devices/:id` | `{tags}` でタグ置換、`{crypto: {key}}` / `{crypto: null}` で鍵の設定 / 解除。`info` は観察値なので受け付けない (400) |
@@ -161,7 +161,7 @@ bark-admin が中身を見るのは `/register` と `/r/:token/register` の 1 �
 | `POST /bark-admin/api/devices/:id/confirm/:kind` | 確認通知を送る (確認の節)。`kind` は `delivery` (平文) か `crypto` (暗号化、鍵が無ければ 409)、それ以外は 404。`{sent: {device_id, status, message?, encrypted}}`、bark-server が受けなければ 502 |
 | `GET /bark-admin/api/devices/:id/confirm/:kind/:nonce` | 確認通知の `url`。kind の nonce が一致すれば確認済みにして「確認できた」の HTML、不一致は 404 の HTML |
 | `POST /bark-admin/api/devices/:id/migrate` | 移行トークンを用意して旧端末へ移行の案内の通知を送る (移行の節)。`{token, sent: {device_id, status, message?, encrypted}}`、bark-server が受けなければ 502 (`token` も返す)、移行済みは 409、不明な device は 404 |
-| `DELETE /bark-admin/api/devices/:id` | `archived_at` を立てる (復帰は PATCH `{archived_at: null}`) |
+| `DELETE /bark-admin/api/devices/:id` | `archived_at` を立てる (アーカイブから戻すのは PATCH `{archived_at: null}`) |
 | `POST /bark-admin/api/invites` `{tags, encrypt?}` | 201 で招待 `{invite, add_url, tags, encrypt, created_at, registered: 0}`。`encrypt` の既定は false (UI は既定 on で送る) |
 | `GET /bark-admin/api/invites` | jsonl (1 行 1 招待、POST の応答と同じ形、`registered` はその招待の使用済みトークンの数 = 登録した端末の数) |
 | `GET /bark-admin/api/registrations/:token` | 招待ページが登録の完了を見る。`{token, state, used_by, used_at, expires_at, encrypted, device}`。`state` は `unused` / `used` / `expired` / `invite-deleted` (使用済みなら期限や招待の削除に関わらず `used`)、`device` は使用済みなら `{device_id, tags, info?, delivery: {confirmed_at}, crypto: {confirmed_at} | null}`、それ以外 null。鍵は返さない。不明なトークンは 404 |
@@ -189,19 +189,19 @@ bark-admin が中身を見るのは `/register` と `/r/:token/register` の 1 �
 
 - `/bark-admin/` TOP: 宛先と端末の一覧だけを置き、操作はダイアログに出す
   - 並びはどの幅でも 1 列で、見出し (「端末」と今の公開名) → 宛先 → 操作 → 端末の一覧。操作は宛先のパネルの下端の 1 か所だけに置き、画面に固定しない
-  - 宛先: `k=v` 改行区切りの AND (値は `device` と同じ解釈)、書き方の誤り、「退役済みも表示」
+  - 宛先: `k=v` 改行区切りの AND (値は `device` と同じ解釈)、書き方の誤り、「アーカイブ済みも表示」
   - 操作: 一致した台数の行と、「n 台へ通知を送る」(主、0 台なら押せない)・「デバイスを追加」(副) の 2 つのボタンを横に並べる
-  - 端末の一覧: 1 端末 1 行で、名前 (詳細へのリンクが行全体を覆う)、owner、残りのタグ (4 つまで、残りは +n。宛先のパターンに当たったタグを先に並べ、押すと宛先に足す / 外す)、device_id、registered_at、`info.os_version`、状態ラベル (受信未確認 / 暗号化 確認済み・未確認 / サーバー名が古い / 移行済み / 退役済み)。送信先に入る端末 (退役していない端末) の絵に黄色の印
+  - 端末の一覧: 1 端末 1 行で、名前 (詳細へのリンクが行全体を覆う)、owner、残りのタグ (4 つまで、残りは +n。宛先のパターンに当たったタグを先に並べ、押すと宛先に足す / 外す)、device_id、registered_at、`info.os_version`、状態ラベル (受信未確認 / 暗号化 確認済み・未確認 / サーバー名が古い / 移行済み → <移行先の端末名> / アーカイブ済み)。送信先に入る端末 (アーカイブしていない端末) の絵に黄色の印
   - 「通知を送る」ダイアログ: 宛先の写し (条件・台数・端末名)、ロック画面風の見本 (title / body を写す)、title / body / level / sound と、残り 17 項目を群 (本文・表示・鳴り方・タップしたとき・履歴) に分けて畳んだ「その他の項目」(入力数を出す)、「n 台へ送る」(シートの下端に付いて回る)、端末ごとの送信結果と生の応答
   - 「デバイスを追加」ダイアログ: 招待の作成 (タグ・「暗号化する」(既定 on)) → QR と URL、作成済みの招待の一覧 (QR の縮小・タグ・暗号化・登録数・作成日時、QR を大きく表示 / URL をコピー / 削除)
 - `/bark-admin/devices/:id` 詳細: 基本情報の表示が主で、操作は状態の行やタグの横の小さなボタンが開くダイアログに分ける
   - 見出し: 端末の絵、name、owner、状態ラベル
-  - 知らせ: サーバー名が古ければ「新しいサーバー名で登録し直す」、移行済みなら移行先へのリンク (この時は退役も復帰も出さない)、退役済みなら「復帰させる」
-  - 状態: device_id / 登録日時 / 受信確認 (未確認 / 確認済み <日時>、「確認を送る」) / 暗号化 (無効 / 有効・未確認 / 有効・確認済み <日時>、「設定する」か「鍵と確認」) / サーバー名 (`info.server_host`。古ければ今の公開名を添えて「登録し直す」、無ければ「不明」、移行済みなら移行先) / 移行元 (移行トークンで登録した端末だけ)。退役済みの端末には操作のボタンを出さない
+  - 知らせ: サーバー名が古ければ「新しいサーバー名で登録し直す」、移行済みなら移行先の端末名と詳細へのリンク (この時はアーカイブの操作を出さない)、アーカイブ済みなら「アーカイブから戻す」
+  - 状態: device_id / 登録日時 / 受信確認 (未確認 / 確認済み <日時>、「確認を送る」) / 暗号化 (無効 / 有効・未確認 / 有効・確認済み <日時>、「設定する」か「鍵と確認」) / サーバー名 (`info.server_host`。古ければ今の公開名を添えて「登録し直す」、無ければ「不明」、移行済みなら移行先の端末名) / 移行元 (移行トークンで登録した端末だけ)。アーカイブ済みの端末には操作のボタンを出さない
   - タグ: チップと「タグを編集」
   - 端末情報: `info` の定義リスト (server_host は状態に出すので除く、編集できない)
-  - 退役: 「この端末を退役させる」(確認のダイアログ)
-  - ダイアログ: 受信確認 (平文の確認通知を送る) / 暗号化 (3 段の状態、伏せた鍵と「表示」「コピー」、手順、「暗号化の確認を送る」、畳んだ「鍵を作り直す・無効にする」。無効なら「暗号化キーを設定」で鍵を作ってコピー) / 新しいサーバー名で登録し直す (移行の通知を送る) / タグを編集 / 退役・復帰。鍵は暗号化のダイアログで「表示」を押すまで画面に出さず、閉じると伏せ直す
+  - アーカイブ: 「アーカイブする」(確認のダイアログ)
+  - ダイアログ: 受信確認 (平文の確認通知を送る) / 暗号化 (3 段の状態、伏せた鍵と「表示」「コピー」、手順、「暗号化の確認を送る」、畳んだ「鍵を作り直す・無効にする」。無効なら「暗号化キーを設定」で鍵を作ってコピー) / 新しいサーバー名で登録し直す (移行の通知を送る) / タグを編集 / アーカイブする・アーカイブから戻す。鍵は暗号化のダイアログで「表示」を押すまで画面に出さず、閉じると伏せ直す
 - `/bark-admin/add/:invite`: 招待の案内ページ。開くたびにその 1 台用の登録トークンを発行する。段 (1. Bark にサーバーを追加 (登録を見つけるまで押せる、Bark が開かなかった時だけ App Store の案内) → 2. 受信確認の通知をタップ (確認通知を再送する) → 3. 暗号化キーを Bark に入れる (鍵付きの招待だけ、伏せ字の鍵をコピーして Bark を開く、暗号化の確認通知を送る))。各段は済み (✓ と 1 行) / 今 (中身を見せ、状態に合わせた案内) / 先 (見出しだけ薄く) (登録の流れ参照)
 - `/bark-admin/add/m/:token`: 移行の案内ページ。招待の案内ページの 1 段目 (見出しとボタンが「新しいサーバー名で追加」、旧端末のタグ) と 2 段目だけ。冒頭に「済んだら Bark のサーバーリストから <旧端末の server_host> を削除してよい」(移行の節参照)
 - 確認できたページ (確認通知の URL) と 404 のページも同じ部品で組む。確認できたページは「端末」(今回確認した行を強調) / 「タグ」/ 「端末情報」(種類・OS の版・Tailscale のマシン名) と詳細へのリンク、404 は TOP へのリンク

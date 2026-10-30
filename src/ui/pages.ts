@@ -185,7 +185,7 @@ ${section(
 ${field({ id: "filter", label: html`<span class="sr-only">宛先の条件</span>`, control: textarea("filter", "", { kv: true, rows: 2, attrs: { placeholder: "owner=kawaz", "aria-describedby": "filter-hint filter-error" } }) })}
 ${hint(html`1 行に 1 つ ${code("key=value")}。全部に一致する端末へ送る。${code("key=*値*")} で値を含むもの、${code("key=*")} でそのタグがあるもの。空なら全台。一覧のタグを押しても足せる`, { id: "filter-hint" })}
 <p id="filter-error" class="error" role="alert" hidden></p>
-${switchRow({ id: "show-archived", label: "退役済みも表示" })}
+${switchRow({ id: "show-archived", label: "アーカイブ済みも表示" })}
 </div>
 <div class="target-bar">
 <p class="match" aria-live="polite"><span id="match-count" class="count"></span><span id="match-text" class="hint"></span></p>
@@ -252,10 +252,10 @@ ${field({ id: "tags", label: "タグ", control: textarea("tags", "", { kv: true,
 </form>`,
 })}
 ${dialog({
-  id: "retire-dialog",
-  title: "退役",
-  body: html`<p id="retire-text"></p>
-${actions(button("退役させる", { variant: "danger", attrs: { id: "archive" } }), button("復帰させる", { variant: "primary", attrs: { id: "restore" } }))}`,
+  id: "archive-dialog",
+  title: "アーカイブ",
+  body: html`<p id="archive-text"></p>
+${actions(button("アーカイブする", { variant: "danger", attrs: { id: "archive" } }), button("アーカイブから戻す", { variant: "primary", attrs: { id: "unarchive" } }))}`,
 })}`;
 }
 
@@ -275,7 +275,7 @@ ${section("state", "状態", panel(html`<div id="state-rows"></div>`))}
 <div class="stack">
 ${section("tags", "タグ", panel(html`<div class="panel-body" id="tag-area"></div>`))}
 ${section("info", "端末情報", html`${panel(html`<div id="info-rows"></div>`)}${hint("Bark アプリが登録するたびに上書きされる観察値。ここでは編集できない", { class: "below" })}`, { aside: "端末が送ってきた値", attrs: { id: "info", hidden: true } })}
-<div id="retire-area"></div>
+<div id="archive-area"></div>
 </div>
 </div>
 </main>

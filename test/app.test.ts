@@ -817,7 +817,7 @@ describe("migration to the current public host", () => {
     expect(devices["NEWKEY"]).toMatchObject({ tags: { owner: "kawaz", name: "iphone", os: "ios" }, crypto: { key: KEY_A, confirmed_at: "t5", pending_nonce: null }, info: { server_host: "bark.example" } });
     expect(devices["NEWKEY"]?.delivery).toBeUndefined();
     expect(devices["NEWKEY"]?.migrated_to).toBeUndefined();
-    // 旧端末: 移行先と日時が付き、確認状態・公開名・退役は触らない
+    // 旧端末: 移行先と日時が付き、確認状態・公開名・アーカイブ状態は触らない
     expect(devices["A"]).toMatchObject({ migrated_to: "NEWKEY", migrated_at: NOW, archived_at: null, delivery: { confirmed_at: "t4" }, crypto: { confirmed_at: "t5" }, info: { server_host: "bark.old.example" } });
     expect((await store.registrations.read())[token]).toMatchObject({ used_by: "NEWKEY", used_at: NOW });
     // 完了の案内は新しい端末へ、旧端末の鍵 (= 引き継いだ鍵) で暗号化して
@@ -851,7 +851,7 @@ describe("migration to the current public host", () => {
     expect((await fetch(`${base}/bark-admin/api/devices/${id}/confirm/delivery/${nonce}`)).status).toBe(200);
   }
 
-  test("the delivery confirm of the migrated device retires the old one (migrated_to stays); the API shows migrated_from", async () => {
+  test("the delivery confirm of the migrated device archives the old one (migrated_to stays); the API shows migrated_from", async () => {
     await makeStale("A");
     const { token } = await migrate("A");
     await fetch(`${base}/r/${token}/register?devicetoken=t-new&key=A2`, { headers: { host: "bark.example" } });
@@ -867,7 +867,7 @@ describe("migration to the current public host", () => {
     expect(await (await fetch(`${base}/bark-admin/api/devices?name=iphone&archived=1`)).text()).toContain('"migrated_to":"A2"');
   });
 
-  test("an old device already retired keeps its archived_at", async () => {
+  test("an old device already archived keeps its archived_at", async () => {
     await makeStale("A");
     const { token } = await migrate("A");
     await fetch(`${base}/r/${token}/register?devicetoken=t-new&key=A2`, { headers: { host: "bark.example" } });
@@ -877,7 +877,7 @@ describe("migration to the current public host", () => {
     expect((await store.devices.read())["A"]?.archived_at).toBe(NOW);
   });
 
-  test("the delivery confirm of a device registered without a migration token retires nothing", async () => {
+  test("the delivery confirm of a device registered without a migration token archives nothing", async () => {
     const { token } = await openAdd((await createInvite({ name: "plain" })).invite);
     await fetch(`${base}/r/${token}/register?devicetoken=t&key=P1`);
     await confirmDelivery("P1");

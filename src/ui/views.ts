@@ -15,7 +15,7 @@ import {
   time,
   type Row,
 } from "./components.ts";
-import { CRYPTO_LABELS, deviceStatuses, glyphKind, hostState, type StatusSource } from "./device-status.ts";
+import { CRYPTO_LABELS, deviceStatuses, glyphKind, hostState, type NameOf, type StatusSource } from "./device-status.ts";
 import { html, type Html } from "./html.ts";
 
 // 部品を組んだ画面の塊 (端末の行・詳細の中身・招待の行)。一覧と詳細はブラウザが API の値で描き直し、確認できたページはサーバが同じ塊で組む
@@ -51,18 +51,18 @@ function tagButton(k: string, v: string, m: TagMatch): Html {
 const SHOWN_TAGS = 4;
 
 // 端末の 1 行。名前のリンクが行全体を覆い、タグのチップは宛先の付け外しのボタンとしてその上に乗る
-export function deviceRow(d: DeviceRowData, currentHost: string, m: TagMatch): Html {
+export function deviceRow(d: DeviceRowData, currentHost: string, m: TagMatch, nameOf?: NameOf): Html {
   const { owner, name, ...rest } = d.tags;
-  const retired = d.archived_at !== null;
+  const archived = d.archived_at !== null;
   // 宛先に当たったタグを先に並べ、+n に畳まれて見えなくならないようにする
   const others = Object.entries(rest).toSorted(([a, av], [b, bv]) => Number(m.hits(b, bv)) - Number(m.hits(a, av)));
   const hidden = others.slice(SHOWN_TAGS);
-  return html`<li class="device${retired ? " retired" : ""}">
-${glyph(glyphKind(d.tags, d.info), { target: !retired })}
+  return html`<li class="device${archived ? " archived" : ""}">
+${glyph(glyphKind(d.tags, d.info), { target: !archived })}
 <div class="device-head"><a class="name${name === undefined ? " unnamed" : ""}" href="${deviceHref(d.device_id)}">${name ?? "名前なし"}</a>${owner === undefined ? "" : html`<span class="owner">owner ${tagButton("owner", owner, m)}</span>`}</div>
 <ul class="chips">${others.slice(0, SHOWN_TAGS).map(([k, v]) => html`<li>${tagButton(k, v, m)}</li>`)}${hidden.length > 0 ? html`<li class="more" title="${hidden.map(([k, v]) => `${k}=${v}`).join("\n")}">+${hidden.length}</li>` : ""}</ul>
 <p class="meta">${code(d.device_id, "id")}${time(d.registered_at)}${d.info.os_version === undefined ? "" : html`<span>${d.info.os_version}</span>`}</p>
-${statuses(deviceStatuses(d, currentHost))}
+${statuses(deviceStatuses(d, currentHost, nameOf))}
 ${icon("chev", "i chev")}
 </li>`;
 }
@@ -97,20 +97,21 @@ export const INFO_KEYS = [
   "last_register_at",
 ] as const;
 
-export function deviceHero(d: DeviceDetailData, currentHost: string): Html {
+export function deviceHero(d: DeviceDetailData, currentHost: string, nameOf?: NameOf): Html {
   const { name, owner } = d.tags;
-  return html`<div class="hero">${glyph(glyphKind(d.tags, d.info), { large: true })}<div class="hero-text"><h1 class="${name === undefined ? "unnamed" : ""}">${name ?? "名前なし"}</h1><p class="owner">${owner === undefined ? "owner なし" : html`owner <b>${owner}</b>`}</p>${statuses(deviceStatuses(d, currentHost))}</div></div>`;
+  return html`<div class="hero">${glyph(glyphKind(d.tags, d.info), { large: true })}<div class="hero-text"><h1 class="${name === undefined ? "unnamed" : ""}">${name ?? "名前なし"}</h1><p class="owner">${owner === undefined ? "owner なし" : html`owner <b>${owner}</b>`}</p>${statuses(deviceStatuses(d, currentHost, nameOf))}</div></div>`;
 }
 
-// 見出しの下の知らせ (退役済み・移行済み・サーバー名が古い)。操作はダイアログを開くボタンだけ
-export function deviceAlerts(d: DeviceDetailData, currentHost: string): Html {
+// 見出しの下の知らせ (移行済み・アーカイブ済み・サーバー名が古い)。操作はダイアログを開くボタンだけ
+export function deviceAlerts(d: DeviceDetailData, currentHost: string, nameOf?: NameOf): Html {
   const out: Html[] = [];
   const host = hostState(d, currentHost);
   if (host.kind === "migrated") {
-    const after = d.archived_at === null ? "移行先の受信確認が済むと自動で退役する。" : "移行先の受信確認で退役した。";
-    out.push(alert("muted", html`<b>新しいサーバー名の端末へ移行した。</b>${after}`, actions(html`<a class="btn btn-primary" href="${deviceHref(host.to)}">移行先の端末を開く</a>`)));
+    const to = nameOf?.(host.to) ?? host.to;
+    const after = d.archived_at === null ? "移行先の受信確認が済むと自動でアーカイブする。" : "移行先の受信確認でアーカイブした。";
+    out.push(alert("moved", html`<b>新しいサーバー名の端末 ${to} へ移行した。</b>${after}`, actions(html`<a class="btn btn-primary" href="${deviceHref(host.to)}">移行先の ${to} を開く</a>`)));
   } else if (d.archived_at !== null) {
-    out.push(alert("muted", html`<b>退役済み (${time(d.archived_at)})。</b>通知の宛先と一覧から外れている。`, actions(opener("復帰させる", "retire-dialog", { variant: "primary" }))));
+    out.push(alert("archived", html`<b>アーカイブ済み (${time(d.archived_at)})。</b>通知の宛先と一覧から外れている。`, actions(opener("アーカイブから戻す", "archive-dialog", { variant: "primary" }))));
   }
   if (host.kind === "stale" && d.archived_at === null) {
     out.push(
@@ -124,11 +125,13 @@ export function deviceAlerts(d: DeviceDetailData, currentHost: string): Html {
   return html`${out}`;
 }
 
-function hostValue(d: DeviceDetailData, currentHost: string): Html {
+function hostValue(d: DeviceDetailData, currentHost: string, nameOf: NameOf | undefined): Html {
   const host = hostState(d, currentHost);
   switch (host.kind) {
-    case "migrated":
-      return html`移行済み → <a href="${deviceHref(host.to)}">${code(host.to)}</a>`;
+    case "migrated": {
+      const name = nameOf?.(host.to);
+      return html`移行済み → <a href="${deviceHref(host.to)}">${name ?? code(host.to)}</a>`;
+    }
     case "unknown":
       return html`不明`;
     case "current":
@@ -148,8 +151,8 @@ export function cryptoValue(c: Confirmed | null): Html {
   return html`<span class="st st-ok">${CRYPTO_LABELS.confirmed} ${time(c.confirmed_at)}</span>`;
 }
 
-// 状態の行。各行の右の小さなボタンがその操作のダイアログを開く (退役済みの端末には操作を出さない)
-export function deviceStateRows(d: DeviceDetailData, currentHost: string): Html {
+// 状態の行。各行の右の小さなボタンがその操作のダイアログを開く (アーカイブ済みの端末には操作を出さない)
+export function deviceStateRows(d: DeviceDetailData, currentHost: string, nameOf?: NameOf): Html {
   const active = d.archived_at === null;
   const act = (label: string, id: string) => (active ? opener(label, id, { small: true }) : undefined);
   const host = hostState(d, currentHost);
@@ -160,7 +163,7 @@ export function deviceStateRows(d: DeviceDetailData, currentHost: string): Html 
     { label: "暗号化", value: cryptoValue(d.crypto), action: act(d.crypto === null ? "設定する" : "鍵と確認", "crypto-dialog") },
     {
       label: "サーバー名",
-      value: hostValue(d, currentHost),
+      value: hostValue(d, currentHost, nameOf),
       mono: host.kind === "current" || host.kind === "stale",
       ...(host.kind === "stale" ? { note: `今のサーバー名は ${currentHost}`, action: act("登録し直す", "migrate-dialog") } : {}),
     },

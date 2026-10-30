@@ -57,6 +57,9 @@ function toggleTag(k: string, v: string): void {
   void loadDevices();
 }
 
+// 移行先の名前は一覧に読み込んだ端末から引く (宛先で絞って一覧に無ければ device_id のまま)
+const nameOf = (id: string): string | undefined => state.devices.find((d) => d.device_id === id)?.tags["name"];
+
 const active = () => state.devices.filter((d) => d.archived_at === null);
 
 function names(devices: DeviceListItem[]): string {
@@ -82,9 +85,9 @@ function renderTarget(): void {
   const targets = active();
   const n = targets.length;
   const entries = Object.entries(state.filter);
-  const retired = state.devices.length - n;
+  const archived = state.devices.length - n;
   setHtml(count, html`${n}<small>台</small>`);
-  text.textContent = `${n === 0 ? "宛先に一致する端末がない" : entries.length === 0 ? "が宛先 (条件なしで全台)" : "が宛先"}${retired > 0 ? `。表示中の退役済み ${retired} 台には送らない` : ""}`;
+  text.textContent = `${n === 0 ? "宛先に一致する端末がない" : entries.length === 0 ? "が宛先 (条件なしで全台)" : "が宛先"}${archived > 0 ? `。表示中のアーカイブ済み ${archived} 台には送らない` : ""}`;
   open.disabled = n === 0;
   setOpenLabel(open, n === 0 ? "通知を送る" : `${n} 台へ通知を送る`);
   setHtml(
@@ -121,7 +124,7 @@ async function loadDevices(): Promise<void> {
     return;
   }
   state.devices = r.value;
-  setHtml(list, html`${state.devices.map((d) => deviceRow(d, state.currentHost, match))}`);
+  setHtml(list, html`${state.devices.map((d) => deviceRow(d, state.currentHost, match, nameOf))}`);
   list.parentElement?.toggleAttribute("hidden", state.devices.length === 0);
   byId("devices-count", HTMLElement).textContent = `${state.devices.length} 台`;
   empty.textContent =
@@ -175,7 +178,7 @@ function renderPushResult(status: number, text: string, parsed: Fetched<PushResu
   const nameOf = new Map(state.devices.map((d) => [d.device_id, d.tags["name"] ?? d.device_id]));
   const failed = body.sent.filter((r) => r.status !== 200).length;
   const total = body.sent.length;
-  const skipped = body.skipped > 0 ? `。退役済みの ${body.skipped} 台は外した` : "";
+  const skipped = body.skipped > 0 ? `。アーカイブ済みの ${body.skipped} 台は外した` : "";
   const summary = failed === 0 ? `${total} 台へ送った${skipped}` : failed === total ? `${total} 台とも送れなかった${skipped}` : `${total} 台のうち ${failed} 台へ送れなかった${skipped}`;
   const at = new Date().toTimeString().slice(0, 8);
   setHtml(

@@ -328,7 +328,7 @@ export function createApp(deps: AppDeps) {
 
   async function finishDeviceConfirm(id: string, kind: ConfirmKind, nonce: string): Promise<Response> {
     const at = now();
-    // 移行してきた端末の受信確認なら、移行元の旧端末を退役させる (移行の節)
+    // 移行してきた端末の受信確認なら、移行元の旧端末をアーカイブする (移行の節)
     const confirmed = await store.devices.update((cur) => {
       const r = cur[id];
       const next = r === undefined ? null : finishConfirm(r, kind, nonce, at);

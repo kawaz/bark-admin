@@ -1,5 +1,5 @@
 import { cryptoMeter } from "../ui/components.ts";
-import { CRYPTO_LABELS, cryptoLevel, formatAt, hostState } from "../ui/device-status.ts";
+import { CRYPTO_LABELS, cryptoLevel, formatAt, hostState, type NameOf } from "../ui/device-status.ts";
 import { html } from "../ui/html.ts";
 import { deviceAlerts, deviceHero, deviceInfoRows, deviceStateRows, deviceTags } from "../ui/views.ts";
 import { ConfigSchema, DeviceViewSchema, failure, readJson, type DeviceView } from "./api.ts";
@@ -17,6 +17,9 @@ const config = await readJson(await fetch("/bark-admin/api/config"), ConfigSchem
 const currentHost = config.ok ? config.value.server_host : "";
 
 let device: DeviceView | null = null;
+// 移行先の端末の名前 (見出しのラベル・知らせ・状態の行に添える)。読めなければ device_id のまま
+const names = new Map<string, string>();
+const nameOf: NameOf = (to) => names.get(to);
 let keyShown = false;
 
 function showError(text: string | null): void {
@@ -58,19 +61,19 @@ function render(d: DeviceView): void {
   device = d;
   const name = d.tags["name"];
   document.title = `${name ?? d.device_id} - bark-admin`;
-  setHtml(byId("hero", HTMLElement), deviceHero(d, currentHost));
-  setHtml(byId("alerts", HTMLElement), deviceAlerts(d, currentHost));
-  setHtml(byId("state-rows", HTMLElement), deviceStateRows(d, currentHost));
+  setHtml(byId("hero", HTMLElement), deviceHero(d, currentHost, nameOf));
+  setHtml(byId("alerts", HTMLElement), deviceAlerts(d, currentHost, nameOf));
+  setHtml(byId("state-rows", HTMLElement), deviceStateRows(d, currentHost, nameOf));
   setHtml(byId("tag-area", HTMLElement), deviceTags(d));
   const info = deviceInfoRows(d.info);
   byId("info", HTMLElement).hidden = info === null;
   setHtml(byId("info-rows", HTMLElement), info ?? html``);
-  const retired = d.archived_at !== null;
+  const archived = d.archived_at !== null;
   setHtml(
-    byId("retire-area", HTMLElement),
-    retired || d.migrated_to !== null
+    byId("archive-area", HTMLElement),
+    archived || d.migrated_to !== null
       ? html``
-      : html`<div class="retire"><p class="hint">退役させると通知の宛先と一覧から外れる。登録は残るので、あとで復帰できる</p><button type="button" class="btn btn-danger" commandfor="retire-dialog" command="show-modal">この端末を退役させる</button></div>`,
+      : html`<div class="archive-zone"><p class="hint">アーカイブすると通知の宛先と一覧から外れる。登録は残るので、あとで戻せる</p><button type="button" class="btn btn-danger" commandfor="archive-dialog" command="show-modal">アーカイブする</button></div>`,
   );
   byId("detail", HTMLElement).hidden = false;
 
@@ -80,11 +83,11 @@ function render(d: DeviceView): void {
   const host = hostState(d, currentHost);
   byId("migrate-text", HTMLElement).textContent = host.kind === "stale" ? `${label} は ${host.host} で登録されている。今のサーバー名は ${currentHost}` : "この端末のサーバー名は今のサーバー名と同じ";
   byId("tags", HTMLTextAreaElement).value = formatTagLines(d.tags);
-  byId("retire-text", HTMLElement).textContent = retired
-    ? `${label} (${d.device_id}) は退役済み。復帰させると通知の宛先と一覧に戻る`
-    : `${label} (${d.device_id}) を退役させる? 通知の宛先と一覧から外れる。登録は残り、あとで復帰できる`;
-  byId("archive", HTMLButtonElement).hidden = retired;
-  byId("restore", HTMLButtonElement).hidden = !retired;
+  byId("archive-text", HTMLElement).textContent = archived
+    ? `${label} (${d.device_id}) はアーカイブ済み。アーカイブから戻すと通知の宛先と一覧に戻る`
+    : `${label} (${d.device_id}) をアーカイブする? 通知の宛先と一覧から外れる。登録は残り、あとで戻せる`;
+  byId("archive", HTMLButtonElement).hidden = archived;
+  byId("unarchive", HTMLButtonElement).hidden = !archived;
 }
 
 async function call(method: string, body?: object, path = ""): Promise<boolean> {
@@ -98,8 +101,15 @@ async function call(method: string, body?: object, path = ""): Promise<boolean> 
     return false;
   }
   showError(null);
+  await loadName(r.value.migrated_to);
   render(r.value);
   return true;
+}
+
+async function loadName(id: string | null): Promise<void> {
+  if (id === null || names.has(id)) return;
+  const r = await readJson(await fetch(`/bark-admin/api/devices/${encodeURIComponent(id)}`), DeviceViewSchema);
+  if (r.ok && r.value.tags["name"] !== undefined) names.set(id, r.value.tags["name"]);
 }
 
 await call("GET");
@@ -120,13 +130,13 @@ byId("tags-form", HTMLFormElement).addEventListener("submit", async (ev) => {
   if (await call("PATCH", { tags: tags.tags })) closeDialog("tags-dialog");
 });
 
-// ---------- 退役・復帰 ----------
+// ---------- アーカイブ ----------
 
 byId("archive", HTMLButtonElement).addEventListener("click", async () => {
-  if (await call("DELETE")) closeDialog("retire-dialog");
+  if (await call("DELETE")) closeDialog("archive-dialog");
 });
-byId("restore", HTMLButtonElement).addEventListener("click", async () => {
-  if (await call("PATCH", { archived_at: null })) closeDialog("retire-dialog");
+byId("unarchive", HTMLButtonElement).addEventListener("click", async () => {
+  if (await call("PATCH", { archived_at: null })) closeDialog("archive-dialog");
 });
 
 // ---------- 確認の通知 ----------

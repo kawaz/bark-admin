@@ -92,7 +92,7 @@ export const DeviceRecordSchema = v.object({
   // 新しい公開名で登録し直した (移行した) 先の device_id と日時。移行トークンでの登録で付く。移行していない行には無い
   migrated_to: v.optional(v.string()),
   migrated_at: v.optional(v.string()),
-  // 移行トークンで登録した端末の移行元 (旧端末の device_id)。この端末の受信確認で旧端末を退役させる
+  // 移行トークンで登録した端末の移行元 (旧端末の device_id)。この端末の受信確認で旧端末をアーカイブする
   migrated_from: v.optional(v.string()),
 });
 export type DeviceRecord = v.InferOutput<typeof DeviceRecordSchema>;
