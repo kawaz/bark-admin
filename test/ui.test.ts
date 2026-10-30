@@ -3,7 +3,7 @@ import { step } from "../src/ui/components.ts";
 import { deviceStatuses, glyphKind, hostState, type StatusSource } from "../src/ui/device-status.ts";
 import { html } from "../src/ui/html.ts";
 import { addPageHtml, devicePageHtml, migratePageHtml } from "../src/ui/pages.ts";
-import { deviceAlerts, deviceHero, deviceRow, deviceStateRows, type DeviceDetailData, type TagMatch } from "../src/ui/views.ts";
+import { deviceAlerts, deviceArchivedBand, deviceHero, deviceRow, deviceStateRows, type DeviceDetailData, type TagMatch } from "../src/ui/views.ts";
 
 const HOST = "bark.new.example";
 const KEY = "K".repeat(32);
@@ -124,14 +124,27 @@ describe("device detail", () => {
     expect(deviceStateRows(detail({ archived_at: "t9" }), HOST).value).not.toContain("commandfor");
   });
 
-  test("alerts: old host offers re-registration, migrated links to the new device by name, archived offers unarchiving", () => {
+  test("alerts of a device in use: old host offers re-registration, migrated (not yet archived) links to the new device by name", () => {
     expect(deviceAlerts(detail({ info: { server_host: "bark.old.example" } }), HOST).value).toContain("新しいサーバー名で登録し直す</button>");
-    const moved = deviceAlerts(detail({ migrated_to: "NEW", archived_at: "t9" }), HOST, () => "iphone").value;
-    expect(moved).toContain('href="/bark-admin/devices/NEW">移行先の iphone を開く</a>');
-    expect(moved).toContain("移行先の受信確認でアーカイブした");
-    expect(moved).not.toContain("アーカイブから戻す");
-    expect(deviceAlerts(detail({ archived_at: "2026-10-21T00:00:00+09:00" }), HOST).value).toContain('commandfor="archive-dialog" command="show-modal">アーカイブから戻す</button>');
+    const moving = deviceAlerts(detail({ migrated_to: "NEW" }), HOST, () => "iphone").value;
+    expect(moving).toContain('href="/bark-admin/devices/NEW">移行先の iphone を開く</a>');
+    expect(moving).toContain("自動でアーカイブする");
     expect(deviceAlerts(detail(), HOST).value).toBe("");
+    expect(deviceArchivedBand(detail(), HOST).value).toBe("");
+  });
+
+  // アーカイブ済みは上部の帯だけが知らせ、操作は「アーカイブから戻す」(移行済みなら移行先へのリンク) だけ
+  test("an archived device gets the band instead of alerts; the only action is unarchiving, or the link to the new device when migrated", () => {
+    const archived = detail({ archived_at: "2026-10-21T00:00:00+09:00", info: { server_host: "bark.old.example" } });
+    expect(deviceAlerts(archived, HOST).value).toBe("");
+    const band = deviceArchivedBand(archived, HOST).value;
+    expect(band).toContain("この端末はアーカイブ済み。通知の宛先に含まれない。");
+    expect(band).toContain('commandfor="archive-dialog" command="show-modal">アーカイブから戻す</button>');
+    expect(band).not.toContain("登録し直す");
+    const moved = deviceArchivedBand(detail({ migrated_to: "NEW", archived_at: "t9" }), HOST, () => "iphone").value;
+    expect(moved).toContain('<a href="/bark-admin/devices/NEW">iphone</a> へ移行した');
+    expect(moved).toContain('href="/bark-admin/devices/NEW">移行先の iphone を開く</a>');
+    expect(moved).not.toContain("アーカイブから戻す");
   });
 });
 

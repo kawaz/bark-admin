@@ -8,6 +8,7 @@ import {
   glyph,
   hint,
   icon,
+  linkButton,
   opener,
   rows,
   statuses,
@@ -102,18 +103,31 @@ export function deviceHero(d: DeviceDetailData, currentHost: string, nameOf?: Na
   return html`<div class="hero">${glyph(glyphKind(d.tags, d.info), { large: true })}<div class="hero-text"><h1 class="${name === undefined ? "unnamed" : ""}">${name ?? "名前なし"}</h1><p class="owner">${owner === undefined ? "owner なし" : html`owner <b>${owner}</b>`}</p>${statuses(deviceStatuses(d, currentHost, nameOf))}</div></div>`;
 }
 
-// 見出しの下の知らせ (移行済み・アーカイブ済み・サーバー名が古い)。操作はダイアログを開くボタンだけ
-export function deviceAlerts(d: DeviceDetailData, currentHost: string, nameOf?: NameOf): Html {
-  const out: Html[] = [];
+// アーカイブ済みの端末のページ上部の帯。使われていない端末だと最初に分かるようにし、操作は「アーカイブから戻す」だけ (移行済みなら移行先へのリンクだけ)
+export function deviceArchivedBand(d: DeviceDetailData, currentHost: string, nameOf?: NameOf): Html {
+  if (d.archived_at === null) return html``;
   const host = hostState(d, currentHost);
   if (host.kind === "migrated") {
     const to = nameOf?.(host.to) ?? host.to;
-    const after = d.archived_at === null ? "移行先の受信確認が済むと自動でアーカイブする。" : "移行先の受信確認でアーカイブした。";
-    out.push(alert("moved", html`<b>新しいサーバー名の端末 ${to} へ移行した。</b>${after}`, actions(html`<a class="btn btn-primary" href="${deviceHref(host.to)}">移行先の ${to} を開く</a>`)));
-  } else if (d.archived_at !== null) {
-    out.push(alert("archived", html`<b>アーカイブ済み (${time(d.archived_at)})。</b>通知の宛先と一覧から外れている。`, actions(opener("アーカイブから戻す", "archive-dialog", { variant: "primary" }))));
+    return alert(
+      "archived",
+      html`<b>この端末はアーカイブ済み。通知の宛先に含まれない。</b>新しいサーバー名の端末 <a href="${deviceHref(host.to)}">${to}</a> へ移行した (${time(d.archived_at)} にアーカイブ)。`,
+      actions(linkButton(`移行先の ${to} を開く`, deviceHref(host.to), { variant: "primary" })),
+    );
   }
-  if (host.kind === "stale" && d.archived_at === null) {
+  return alert("archived", html`<b>この端末はアーカイブ済み。通知の宛先に含まれない。</b>${time(d.archived_at)} にアーカイブした。`, actions(opener("アーカイブから戻す", "archive-dialog", { variant: "primary" })));
+}
+
+// 使われている端末の知らせ (移行して自動アーカイブ待ち・サーバー名が古い)。操作はダイアログを開くボタンだけ
+export function deviceAlerts(d: DeviceDetailData, currentHost: string, nameOf?: NameOf): Html {
+  const out: Html[] = [];
+  if (d.archived_at !== null) return html``;
+  const host = hostState(d, currentHost);
+  if (host.kind === "migrated") {
+    const to = nameOf?.(host.to) ?? host.to;
+    out.push(alert("moved", html`<b>新しいサーバー名の端末 ${to} へ移行した。</b>移行先の受信確認が済むと自動でアーカイブする。`, actions(linkButton(`移行先の ${to} を開く`, deviceHref(host.to), { variant: "primary" }))));
+  }
+  if (host.kind === "stale") {
     out.push(
       alert(
         "warn",

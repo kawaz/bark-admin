@@ -20,7 +20,6 @@
   --warn: #b25500;
   --danger: #c0352b;
   --moved: #0a72b5;
-  --archived: #8a5a2b;
   --focus: #2b4bd6;
   --banner: rgba(255, 255, 255, 0.8);
   --backdrop: rgba(17, 22, 46, 0.42);
@@ -53,7 +52,6 @@
     --warn: #ffa64f;
     --danger: #ff6d60;
     --moved: #5cb8f2;
-    --archived: #d6a46f;
     --focus: #ffc21a;
     --banner: rgba(46, 54, 97, 0.84);
     --backdrop: rgba(4, 6, 18, 0.6);
@@ -302,11 +300,12 @@ button.chip[aria-pressed="true"] .k { color: var(--signal-ink); }
 
 .st { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 650; white-space: nowrap; }
 .st::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; }
-/* 塗りの点は「その状態にある」(確認済み・古い・移行済み・アーカイブ済み)、中抜きの点は「まだ・無い」(未確認・無効・未登録) */
+/* 塗りの点は「その状態にある」(確認済み・古い・移行済み・アーカイブ済み)、中抜きの点は「まだ・無い」(未確認・無効・未登録)。
+   アーカイブ済みは使われていない端末なので、ラベルも行・ページと同じく減色する */
 .st-ok { color: var(--ok); }
 .st-warn { color: var(--warn); }
 .st-moved { color: var(--moved); }
-.st-archived { color: var(--archived); }
+.st-archived { color: var(--ink-3); }
 .st-info { color: var(--info); }
 .st-muted { color: var(--ink-3); }
 .st-info::before, .st-muted::before { background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
@@ -409,13 +408,20 @@ button.chip[aria-pressed="true"] .k { color: var(--signal-ink); }
 .device .name:focus-visible::after { outline: 3px solid var(--focus); outline-offset: -3px; border-radius: 4px; }
 .device .owner { color: var(--ink-2); font-size: 14px; display: inline-flex; align-items: baseline; gap: 4px; }
 .device .chips, .device .owner .chip { position: relative; z-index: 1; }
+/* チップの間の隙間は行のリンクへクリックを通す */
+.device > .chips { pointer-events: none; }
+.device > .chips :is(button, .more) { pointer-events: auto; }
 .device .owner .chip .k { display: none; }
 .device > .chips { grid-area: tags; }
 .device .meta { grid-area: meta; display: flex; flex-wrap: wrap; gap: 2px 14px; color: var(--ink-2); font-size: 13px; }
 .device .meta .id { color: var(--ink); font-size: 13px; }
 .device > .statuses { grid-area: state; }
 .device > .chev { grid-area: chev; align-self: center; color: var(--ink-3); width: 20px; height: 20px; }
-.device.archived > :not(.chips, .statuses) { opacity: 0.62; }
+/* アーカイブ済みの行は減色する (状態ラベルは色を保つ。アーカイブ済みのラベル自体が減色)。
+   filter / opacity は重なりの順を変えるので、減色した絵・補足は行のリンクへクリックを通す。名前の行は filter を掛けると行全体を覆うリンクの基準が変わるので文字色で減色する */
+.device.archived > :not(.statuses, .device-head), .device.archived .owner .chip { filter: grayscale(1); opacity: 0.5; }
+.device.archived > :is(.glyph, .meta, .chev) { pointer-events: none; }
+.device.archived .name, .device.archived .owner { color: var(--ink-3); }
 
 @container (min-width: 640px) {
   .device {
@@ -626,8 +632,11 @@ details.more[open] > summary svg { transform: rotate(-90deg); }
 .alert-warn b { color: var(--warn); }
 .alert-moved { background: color-mix(in srgb, var(--moved) 10%, var(--surface)); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--moved) 40%, transparent); }
 .alert-moved b { color: var(--moved); }
-.alert-archived { background: color-mix(in srgb, var(--archived) 10%, var(--surface)); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--archived) 40%, transparent); }
-.alert-archived b { color: var(--archived); }
+.alert-archived { background: var(--surface-2); box-shadow: inset 0 0 0 1.5px var(--ink-3); }
+.alert-archived b { display: block; font-size: 17px; }
+
+/* アーカイブ済みの端末の詳細: 見出しと節を減色する (上部の帯と状態ラベルは保つ) */
+.device-archived .hero > .glyph, .device-archived .hero h1, .device-archived .hero .owner, .device-archived .detail-cols section { filter: grayscale(1); opacity: 0.55; }
 
 /* 定義リストの行 (値の右に小さな操作ボタン) */
 .rows { margin: 0; }

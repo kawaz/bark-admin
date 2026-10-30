@@ -266,6 +266,7 @@ export function devicePageHtml(): string {
     body: html`${backBar(`${ADMIN}/`, "端末")}
 <main class="detail">
 <p id="error" class="error" role="alert" hidden></p>
+<div id="band"></div>
 <div id="hero"></div>
 <div id="detail" class="detail-cols" hidden>
 <div class="stack">

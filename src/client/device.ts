@@ -1,7 +1,7 @@
 import { cryptoMeter } from "../ui/components.ts";
 import { CRYPTO_LABELS, cryptoLevel, formatAt, hostState, type NameOf } from "../ui/device-status.ts";
 import { html } from "../ui/html.ts";
-import { deviceAlerts, deviceHero, deviceInfoRows, deviceStateRows, deviceTags } from "../ui/views.ts";
+import { deviceAlerts, deviceArchivedBand, deviceHero, deviceInfoRows, deviceStateRows, deviceTags } from "../ui/views.ts";
 import { ConfigSchema, DeviceViewSchema, failure, readJson, type DeviceView } from "./api.ts";
 import { byId, closeDialog, copyText, formatTagLines, parseTagLines, setHtml, writeClipboard } from "./dom.ts";
 
@@ -61,6 +61,9 @@ function render(d: DeviceView): void {
   device = d;
   const name = d.tags["name"];
   document.title = `${name ?? d.device_id} - bark-admin`;
+  // アーカイブ済みはページ全体を減色し、上部の帯で使われていない端末だと示す
+  document.body.classList.toggle("device-archived", d.archived_at !== null);
+  setHtml(byId("band", HTMLElement), deviceArchivedBand(d, currentHost, nameOf));
   setHtml(byId("hero", HTMLElement), deviceHero(d, currentHost, nameOf));
   setHtml(byId("alerts", HTMLElement), deviceAlerts(d, currentHost, nameOf));
   setHtml(byId("state-rows", HTMLElement), deviceStateRows(d, currentHost, nameOf));
